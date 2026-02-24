@@ -24,26 +24,9 @@ WEBHOOK_URL = os.environ.get('RENDER_EXTERNAL_URL')
 # Initialize scraper
 scraper = CarScraper()
 
-# Initialize bot properly
-bot = Bot(token=TELEGRAM_BOT_TOKEN)
-bot.initialize()
-logger.info("✅ Bot initialized successfully")
-
-# Build application with the initialized bot
-telegram_app = Application.builder().bot(bot).build()
-
-# Add handlers to telegram_app
-telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(CommandHandler("help", help_command))
-telegram_app.add_handler(CommandHandler("cars", get_cars))
-telegram_app.add_handler(CommandHandler("distress", get_distress))
-telegram_app.add_handler(CommandHandler("mercedes", get_mercedes))
-telegram_app.add_handler(CommandHandler("lexus", get_lexus))
-telegram_app.add_handler(CommandHandler("toyota", get_toyota))
-
-# Initialize the application
-telegram_app.initialize()
-logger.info("✅ Telegram application initialized successfully")
+# ============================================
+# FIX 1: Define ALL handler functions FIRST
+# ============================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a welcome message when /start is issued."""
@@ -165,6 +148,49 @@ async def filter_by_car_type(update: Update, context: ContextTypes.DEFAULT_TYPE,
     except Exception as e:
         logger.error(f"Error filtering by car type: {e}")
         await update.message.reply_text("Sorry, I encountered an error. Please try again later.")
+
+# ============================================
+# FIX 2: Properly await bot.initialize()
+# ============================================
+
+# Initialize bot properly with await
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+loop.run_until_complete(Bot(token=TELEGRAM_BOT_TOKEN).initialize())
+loop.close()
+
+# Re-create bot after initialization (or store the initialized instance)
+bot = Bot(token=TELEGRAM_BOT_TOKEN)
+logger.info("✅ Bot initialized successfully")
+
+# ============================================
+# FIX 3: Build application with bot
+# ============================================
+
+telegram_app = Application.builder().bot(bot).build()
+
+# Add handlers (functions now exist)
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(CommandHandler("help", help_command))
+telegram_app.add_handler(CommandHandler("cars", get_cars))
+telegram_app.add_handler(CommandHandler("distress", get_distress))
+telegram_app.add_handler(CommandHandler("mercedes", get_mercedes))
+telegram_app.add_handler(CommandHandler("lexus", get_lexus))
+telegram_app.add_handler(CommandHandler("toyota", get_toyota))
+
+# ============================================
+# FIX 4: Properly await telegram_app.initialize()
+# ============================================
+
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+loop.run_until_complete(telegram_app.initialize())
+loop.close()
+logger.info("✅ Telegram application initialized successfully")
+
+# ============================================
+# Webhook and Routes
+# ============================================
 
 @app.route('/webhook', methods=['POST'])
 def webhook():

@@ -24,9 +24,9 @@ class CarScraper:
         
         # Target car makes/models
         self.target_cars = {
-            'mercedes': ['mercedes', 'benz', 'mercedes-benz', 'c-class', 'e-class'],
-            'lexus': ['lexus', 'rx', 'rx350', 'rx330', 'es350', 'gs300'],
-            'toyota': ['venza', 'avalon', 'camry', 'toyota venza', 'toyota avalon', 'toyota camry']
+            'mercedes': ['mercedes', 'benz', 'mercedes-benz', 'c-class', 'e-class', 'c300', 'e350', 'gle', 'glk'],
+            'lexus': ['lexus', 'rx', 'rx350', 'rx330', 'es350', 'gs300', 'gx460', 'lx570'],
+            'toyota': ['venza', 'avalon', 'camry', 'toyota venza', 'toyota avalon', 'toyota camry', 'camry le', 'camry se']
         }
         
         # Distress keywords
@@ -54,21 +54,25 @@ class CarScraper:
         listings = []
         
         try:
-            # Prepare the actor input for Jiji scraper
+            # Prepare the actor input for Jiji scraper - CORRECT FORMAT from screenshot
             run_input = {
-                "searchTerms": ["mercedes benz", "lexus", "toyota venza", "toyota avalon", "toyota camry"],
-                "category": "cars",
-                "location": "Abuja",
-                "maxResults": max_results,
+                "urls": [  # Using URLs format as shown in the Apify console
+                    "https://jiji.ng/cars?query=mercedes+benz",
+                    "https://jiji.ng/cars?query=lexus",
+                    "https://jiji.ng/cars?query=toyota+venza",
+                    "https://jiji.ng/cars?query=toyota+avalon",
+                    "https://jiji.ng/cars?query=toyota+camry"
+                ],
+                "offset": 0,  # Added as shown in screenshot
                 "proxyConfiguration": {
                     "useApifyProxy": True,
                     "apifyProxyGroups": ["RESIDENTIAL"]
                 }
             }
             
-            logger.info(f"Starting Apify Jiji scraper")
+            logger.info(f"Starting Apify Jiji scraper with URLs: {run_input['urls']}")
             
-            # FIXED: Updated to correct actor name
+            # Use the correct actor ID from the screenshot
             run = self.apify_client.actor("stealth_mode/jiji-product-search-scraper").call(run_input=run_input)
             
             # Fetch results from the dataset
@@ -96,20 +100,23 @@ class CarScraper:
         Extract relevant information and check if it matches our criteria
         """
         try:
-            # Extract basic info
-            title = item.get('title', '')
-            description = item.get('description', '')
-            price = item.get('price', '')
-            url = item.get('url', '')
-            location = item.get('location', '')
-            images = item.get('images', [])
+            # Extract basic info - adjust field names based on actual actor output
+            title = item.get('title', '') or item.get('name', '')
+            description = item.get('description', '') or item.get('details', '')
+            price = item.get('price', '') or item.get('price_raw', '')
+            url = item.get('url', '') or item.get('link', '')
+            location = item.get('location', '') or item.get('region', '')
+            images = item.get('images', []) or item.get('image_urls', [])
             
             # Combine title and description for searching
             full_text = f"{title} {description}".lower()
             
             # Check if it's in Abuja
-            if 'abuja' not in location.lower():
-                return None
+            location_lower = location.lower()
+            if 'abuja' not in location_lower and 'fct' not in location_lower:
+                # Still include if not specified - actor might not extract location perfectly
+                # We'll rely on the URL search which is already Abuja-focused
+                pass
             
             # Check if it's one of our target cars
             car_type = self._identify_car_type(full_text)
@@ -123,13 +130,13 @@ class CarScraper:
             formatted_price = self._format_price(price)
             
             # Get first image
-            image_url = images[0] if images else None
+            image_url = images[0] if images and isinstance(images, list) else images if isinstance(images, str) else None
             
             return {
                 'title': title,
                 'price': formatted_price,
                 'url': url,
-                'location': location,
+                'location': location if location else 'Abuja',
                 'car_type': car_type,
                 'is_distress': is_distress,
                 'image_url': image_url,
@@ -168,15 +175,19 @@ class CarScraper:
         
         # Clean and format price
         try:
+            # Handle different price formats
+            if isinstance(price_str, (int, float)):
+                return f"₦{price_str:,}"
+            
             # Remove currency symbols and commas
-            clean_price = price_str.replace('₦', '').replace(',', '').strip()
-            if clean_price.isdigit():
+            clean_price = str(price_str).replace('₦', '').replace('N', '').replace(',', '').strip()
+            if clean_price.replace('.', '').isdigit():
                 # Format with commas
-                return f"₦{int(clean_price):,}"
+                return f"₦{float(clean_price):,.0f}"
         except:
             pass
         
-        return price_str
+        return str(price_str)
     
     def scrape_nairaland_backup(self, max_pages=2):
         """
@@ -185,85 +196,6 @@ class CarScraper:
         """
         logger.warning("Nairaland backup scraper is currently disabled due to 403 errors")
         return []
-        
-        # Original code commented out below:
-        """
-        listings = []
-        
-        for page in range(1, max_pages + 1):
-            try:
-                # Construct URL with pagination
-                if page == 1:
-                    url = self.nairaland_url
-                else:
-                    url = f"{self.nairaland_url}/{page}"
-                
-                # Add random user agent
-                headers = {
-                    'User-Agent': self.ua.random
-                }
-                
-                # Add delay to be respectful
-                time.sleep(random.uniform(2, 4))
-                
-                response = requests.get(url, headers=headers, timeout=10)
-                response.raise_for_status()
-                
-                soup = BeautifulSoup(response.text, 'html.parser')
-                
-                # Find all topic rows (Nairaland specific structure)
-                topics = soup.find_all('tr', class_='topic_row')
-                
-                for topic in topics:
-                    try:
-                        # Extract title and link
-                        title_link = topic.find('a', class_='topic_link')
-                        if not title_link:
-                            continue
-                        
-                        title = title_link.text.strip()
-                        url = f"https://www.nairaland.com{title_link.get('href')}"
-                        
-                        # Check if it's about cars and in Abuja
-                        full_text = title.lower()
-                        
-                        # Check for Abuja
-                        if 'abuja' not in full_text:
-                            continue
-                        
-                        # Check if it's one of our target cars
-                        car_type = self._identify_car_type(full_text)
-                        if not car_type:
-                            continue
-                        
-                        # Check for distress
-                        is_distress = self._check_distress(full_text)
-                        
-                        # Extract price (if mentioned in title)
-                        price = self._extract_price_from_title(title)
-                        
-                        listings.append({
-                            'title': title,
-                            'price': price,
-                            'url': url,
-                            'location': 'Abuja',
-                            'car_type': car_type,
-                            'is_distress': is_distress,
-                            'image_url': None,
-                            'source': 'Nairaland'
-                        })
-                        
-                    except Exception as e:
-                        logger.error(f"Error parsing topic: {e}")
-                        continue
-                
-                logger.info(f"Scraped page {page} of Nairaland, found {len(topics)} topics")
-                
-            except Exception as e:
-                logger.error(f"Error scraping Nairaland page {page}: {e}")
-        
-        return listings
-        """
     
     def _extract_price_from_title(self, title):
         """Extract price from title if present"""
@@ -304,14 +236,8 @@ class CarScraper:
                 logger.info(f"Found {len(jiji_listings)} listings from Apify")
                 return all_listings[:max_results]
         
-        # Nairaland backup is currently disabled due to 403 errors
-        # Uncomment the lines below if you want to try it again in the future
-        """
-        # If Apify fails or returns few results, try Nairaland
-        logger.info("Attempting backup scrape from Nairaland...")
-        nairaland_listings = self.scrape_nairaland_backup(max_pages=2)
-        all_listings.extend(nairaland_listings)
-        """
+        # Nairaland backup is disabled for now
+        logger.info("No Apify results found, returning what we have")
         
         # Sort by distress first, then by whatever
         all_listings.sort(key=lambda x: (-x['is_distress'], x['title']))

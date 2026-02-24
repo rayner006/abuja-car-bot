@@ -1,6 +1,6 @@
 # ============================================
 # REAL SCRAPER FOR NIGERIAN CAR SITES
-# WITH ENHANCED JIJI SCRAPING
+# WITH ENHANCED JIJI SCRAPING AND DEBUG
 # ============================================
 
 import requests
@@ -49,6 +49,8 @@ class NigerianCarScraper:
             # Find all topic links
             all_links = soup.find_all('a', href=True)
             topic_links = [l for l in all_links if '/topic/' in l['href']]
+            
+            logger.info(f"  Found {len(topic_links)} total topics on page")
             
             for link in topic_links[:30]:  # First 30 topics
                 try:
@@ -132,6 +134,7 @@ class NigerianCarScraper:
             
             logger.info("  👉 Visiting homepage to get cookies...")
             home_response = session.get("https://jiji.ng", headers=home_headers, timeout=REQUEST_TIMEOUT)
+            logger.info(f"  Homepage response: {home_response.status_code}, length: {len(home_response.text)}")
             self.random_delay(3, 6)
             
             # Step 2: Now try search with advanced headers
@@ -171,6 +174,29 @@ class NigerianCarScraper:
                 
                 response = session.get(url, headers=search_headers, timeout=REQUEST_TIMEOUT)
                 
+                # ========== DEBUG INFO ==========
+                logger.info(f"  📊 Jiji response status: {response.status_code}")
+                logger.info(f"  📊 Response length: {len(response.text)} characters")
+                
+                # Check for blocking indicators
+                preview = response.text[:2000].lower()
+                if "captcha" in preview:
+                    logger.warning("  ⚠️ CAPTCHA detected! Jiji is blocking bots.")
+                elif "verify" in preview:
+                    logger.warning("  ⚠️ Verification page detected!")
+                elif "robot" in preview or "automated" in preview:
+                    logger.warning("  ⚠️ Bot detection page detected!")
+                elif "no listings" in preview or "no results" in preview:
+                    logger.warning("  ⚠️ Jiji says 'No listings' (silent block)")
+                elif len(response.text) < 5000:
+                    logger.warning(f"  ⚠️ Suspiciously small response ({len(response.text)} chars) - likely blocked")
+                else:
+                    logger.info(f"  ✅ Page loaded normally, looking for cars...")
+                    
+                # Save sample of response for debugging
+                logger.debug(f"  Response sample: {response.text[:500]}")
+                # ========== END DEBUG ==========
+                
                 if response.status_code != 200:
                     logger.warning(f"  ⚠️ Jiji returned {response.status_code} for {make_name}")
                     continue
@@ -185,19 +211,22 @@ class NigerianCarScraper:
                     'div[class*="qa-advert"]',
                     'a[href*="/cars/"]',
                     'div.listing-card',
-                    'div.advert-card'
+                    'div.advert-card',
+                    'div[data-testid="listing"]',
+                    'div.Listing__Container'
                 ]
                 
                 for selector in selectors:
                     cards = soup.select(selector)
                     if cards:
-                        logger.info(f"  Found cards using selector: {selector}")
+                        logger.info(f"  ✅ Found {len(cards)} cards using selector: {selector}")
                         break
                 
                 if not cards:
                     # Try finding any div with car-like content
                     all_divs = soup.find_all('div')
                     cards = [div for div in all_divs if div.find('img') and len(div.text) > 50]
+                    logger.info(f"  Found {len(cards)} potential cards using fallback method")
                 
                 logger.info(f"  Found {len(cards)} potential cards for {make_name}")
                 
@@ -259,6 +288,7 @@ class NigerianCarScraper:
                         logger.info(f"  ✅ Jiji {make_name}: {title[:50]}...")
                         
                     except Exception as e:
+                        logger.debug(f"  Error parsing card: {e}")
                         continue
                 
                 # Random delay between makes
@@ -300,10 +330,12 @@ class NigerianCarScraper:
                 logger.warning("⚠️ OList not accessible, skipping...")
                 return []
             
+            logger.info(f"  OList response length: {len(response.text)}")
             soup = BeautifulSoup(response.text, 'html5lib')
             
             # Find listing items
             items = soup.find_all('div', class_=re.compile('listing|item|ad|card'))
+            logger.info(f"  Found {len(items)} potential items")
             
             for item in items[:20]:
                 try:

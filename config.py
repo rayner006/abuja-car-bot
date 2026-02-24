@@ -1,7 +1,4 @@
-# ============================================
-# CONFIGURATION - WITH REAL SCRAPING SETTINGS
-# ============================================
-
+# config.py
 import os
 
 # 🔐 TELEGRAM SETTINGS
@@ -18,9 +15,9 @@ ABUJA_AREAS = [
 
 # Target Cars (Benz, Lexus, Toyota)
 TARGET_MAKES = {
-    'BENZ': ['mercedes', 'benz', 'c300', 'e350', 'gle', 'glk', 'c200', 'e200', 's-class', 'ml', 'c250', 'e250', 'gl450', 'glk350', 'amg'],
-    'LEXUS': ['lexus', 'rx350', 'rx330', 'rx300', 'es350', 'gx460', 'lx570', 'gs', 'ls', 'rx400', 'rx450', 'es300', 'gx470'],
-    'TOYOTA': ['venza', 'avalon', 'camry', 'toyota venza', 'toyota avalon', 'toyota camry', 'camry le', 'camry se', 'avalon limited']
+    'mercedes': ['mercedes', 'benz', 'c300', 'e350', 'gle', 'glk', 'c200', 'e200', 's-class', 'ml', 'c250', 'e250', 'gl450', 'glk350', 'amg'],
+    'lexus': ['lexus', 'rx350', 'rx330', 'rx300', 'es350', 'gx460', 'lx570', 'gs', 'ls', 'rx400', 'rx450', 'es300', 'gx470'],
+    'toyota': ['venza', 'avalon', 'camry', 'toyota venza', 'toyota avalon', 'toyota camry', 'camry le', 'camry se', 'avalon limited']
 }
 
 # Distress Keywords (with weights)
@@ -54,7 +51,7 @@ PIDGIN_KEYWORDS = {
 }
 
 # Combine all keywords
-ALL_DISTRESS = {**DISTRESS_KEYWORDS, **PIDGIN_KEYWORDS}
+ALL_DISTRESS_KEYWORDS = list(DISTRESS_KEYWORDS.keys()) + list(PIDGIN_KEYWORDS.keys())
 
 # Scan settings
 SCAN_INTERVAL_MINUTES = 10

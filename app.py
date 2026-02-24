@@ -25,7 +25,13 @@ WEBHOOK_URL = os.environ.get('RENDER_EXTERNAL_URL')
 scraper = CarScraper()
 
 # ============================================
-# FIX 1: Define ALL handler functions FIRST
+# Create a single event loop to reuse
+# ============================================
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
+# ============================================
+# Define ALL handler functions FIRST
 # ============================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -150,21 +156,16 @@ async def filter_by_car_type(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await update.message.reply_text("Sorry, I encountered an error. Please try again later.")
 
 # ============================================
-# FIX 2: Properly await bot.initialize()
+# Initialize bot with the persistent loop
 # ============================================
 
-# Initialize bot properly with await
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-loop.run_until_complete(Bot(token=TELEGRAM_BOT_TOKEN).initialize())
-loop.close()
-
-# Re-create bot after initialization (or store the initialized instance)
+# Initialize bot
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
+loop.run_until_complete(bot.initialize())
 logger.info("✅ Bot initialized successfully")
 
 # ============================================
-# FIX 3: Build application with bot
+# Build application with the initialized bot
 # ============================================
 
 telegram_app = Application.builder().bot(bot).build()
@@ -178,14 +179,8 @@ telegram_app.add_handler(CommandHandler("mercedes", get_mercedes))
 telegram_app.add_handler(CommandHandler("lexus", get_lexus))
 telegram_app.add_handler(CommandHandler("toyota", get_toyota))
 
-# ============================================
-# FIX 4: Properly await telegram_app.initialize()
-# ============================================
-
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
+# Initialize application with the persistent loop
 loop.run_until_complete(telegram_app.initialize())
-loop.close()
 logger.info("✅ Telegram application initialized successfully")
 
 # ============================================
@@ -196,9 +191,9 @@ logger.info("✅ Telegram application initialized successfully")
 def webhook():
     """Telegram webhook endpoint."""
     try:
-        # Use the already initialized telegram_app directly
+        # Use the already initialized telegram_app with the persistent loop
         update = Update.de_json(request.get_json(force=True), bot)
-        asyncio.run(telegram_app.process_update(update))
+        loop.run_until_complete(telegram_app.process_update(update))
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         logger.error(f"Error processing webhook: {e}")
@@ -235,10 +230,10 @@ def home():
     return "Abuja Car Bot is running! 🚗 Use Telegram to interact with me.", 200
 
 if __name__ == '__main__':
-    # Set up webhook
+    # Set up webhook using the persistent loop
     if WEBHOOK_URL and TELEGRAM_BOT_TOKEN:
         webhook_url = f"{WEBHOOK_URL}/webhook"
-        asyncio.run(bot.set_webhook(url=webhook_url))
+        loop.run_until_complete(bot.set_webhook(url=webhook_url))
         logger.info(f"Webhook set to {webhook_url}")
     
     # Run Flask app

@@ -24,12 +24,15 @@ WEBHOOK_URL = os.environ.get('RENDER_EXTERNAL_URL')
 # Initialize scraper
 scraper = CarScraper()
 
-# Initialize Telegram bot
+# Initialize Telegram bot with proper initialization
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-# IMPORTANT FIX #1: Initialize the application
+# CRITICAL FIX: Properly initialize the application
 telegram_app.initialize()
+telegram_app.start()
+
+logger.info("✅ Telegram application initialized successfully")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a welcome message when /start is issued."""
@@ -166,6 +169,7 @@ def webhook():
     """Telegram webhook endpoint."""
     try:
         update = Update.de_json(request.get_json(force=True), bot)
+        # Process the update with the initialized app
         asyncio.run(telegram_app.process_update(update))
         return jsonify({"status": "ok"}), 200
     except Exception as e:
@@ -177,7 +181,8 @@ def health():
     """Health check endpoint."""
     return jsonify({
         "status": "healthy",
-        "apify_configured": bool(APIFY_TOKEN)
+        "apify_configured": bool(APIFY_TOKEN),
+        "telegram_configured": bool(TELEGRAM_BOT_TOKEN)
     }), 200
 
 @app.route('/test-scraper', methods=['GET'])

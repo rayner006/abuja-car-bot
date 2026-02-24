@@ -9,4 +9,6 @@ selenium==4.15.0
 undetected-chromedriver==3.5.4
 selenium-stealth==1.0.6
 webdriver-manager==4.0.1
+selenium-wire==5.1.0
+selenium-wire-undetected-chromedriver==1.0.1
 

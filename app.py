@@ -1,235 +1,205 @@
-from flask import Flask, jsonify
 import os
-import threading
-import time
-import random
 import logging
-import requests
-from datetime import datetime
+from flask import Flask, request, jsonify
+from telegram import Bot, Update
+from telegram.ext import Application, CommandHandler, ContextTypes
+import asyncio
+from scraper import CarScraper
 
-# Import config and scraper
-from config import *
-from scraper import NigerianCarScraper
-
-# Set up logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
-# Create Flask app
+# Initialize Flask app
 app = Flask(__name__)
 
-# Track scan status
-last_scan_time = None
-last_results = []
-scan_count = 0
-cars_found_today = 0
+# Get environment variables
+TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
+APIFY_TOKEN = os.environ.get('APIFY_TOKEN')
+WEBHOOK_URL = os.environ.get('RENDER_EXTERNAL_URL')
 
 # Initialize scraper
-scraper = NigerianCarScraper()
+scraper = CarScraper()
 
-def send_telegram_message(message):
-    """Send message to your Telegram"""
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        logger.error("Telegram credentials not set!")
-        return False
-    
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    
-    payload = {
-        'chat_id': TELEGRAM_CHAT_ID,
-        'text': message,
-        'parse_mode': 'HTML'
-    }
+# Initialize Telegram bot
+bot = Bot(token=TELEGRAM_TOKEN)
+telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send a welcome message when /start is issued."""
+    welcome_message = (
+        "🚗 *Welcome to Abuja Car Finder Bot!*\n\n"
+        "I help you find cars (Benz, Lexus, Toyota Venza/Avalon/Camry) "
+        "from direct owners in Abuja.\n\n"
+        "Available commands:\n"
+        "/cars - Get latest car listings\n"
+        "/distress - Get only distress sales\n"
+        "/mercedes - Find Mercedes-Benz\n"
+        "/lexus - Find Lexus\n"
+        "/toyota - Find Toyota Venza/Avalon/Camry\n"
+        "/help - Show this message\n\n"
+        "Powered by Apify for reliable scraping! 🤖"
+    )
+    await update.message.reply_text(welcome_message, parse_mode='Markdown')
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send help message."""
+    await start(update, context)
+
+async def get_cars(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Get latest car listings."""
+    await update.message.reply_text("🔍 Searching for cars in Abuja... Please wait.")
     
     try:
-        response = requests.post(url, json=payload, timeout=10)
-        if response.status_code == 200:
-            return True
-        else:
-            logger.error(f"Telegram error: {response.text}")
-            return False
+        # Run scraper in thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        listings = await loop.run_in_executor(
+            None, 
+            scraper.get_all_listings,
+            True,  # use_apify
+            10     # max_results
+        )
+        
+        formatted_message = scraper.format_listings_for_telegram(listings)
+        await update.message.reply_text(formatted_message, parse_mode='Markdown', disable_web_page_preview=False)
+        
     except Exception as e:
-        logger.error(f"Failed to send Telegram: {e}")
-        return False
+        logger.error(f"Error in get_cars: {e}")
+        await update.message.reply_text("Sorry, I encountered an error. Please try again later.")
 
-def calculate_distress_score(text):
-    """Calculate distress score based on keywords"""
-    text_lower = text.lower()
-    score = 0
-    matched = []
+async def get_distress(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Get only distress sales."""
+    await update.message.reply_text("🔍 Searching for distress sales in Abuja... Please wait.")
     
-    for keyword, weight in ALL_DISTRESS.items():
-        if keyword in text_lower:
-            score += weight
-            matched.append(keyword)
-    
-    return score, matched
+    try:
+        loop = asyncio.get_event_loop()
+        all_listings = await loop.run_in_executor(
+            None, 
+            scraper.get_all_listings,
+            True,  # use_apify
+            20     # max_results
+        )
+        
+        # Filter for distress sales
+        distress_listings = [l for l in all_listings if l['is_distress']]
+        
+        if not distress_listings:
+            await update.message.reply_text("No distress sales found at the moment.")
+            return
+        
+        message = "🔴 *DISTRESS SALES IN ABUJA* 🔴\n\n"
+        for i, listing in enumerate(distress_listings[:10], 1):
+            message += f"{i}. *{listing['title']}*\n"
+            message += f"💰 {listing['price']}\n"
+            message += f"📍 {listing['location']}\n"
+            message += f"[View]({listing['url']})\n\n"
+        
+        await update.message.reply_text(message, parse_mode='Markdown', disable_web_page_preview=True)
+        
+    except Exception as e:
+        logger.error(f"Error in get_distress: {e}")
+        await update.message.reply_text("Sorry, I encountered an error. Please try again later.")
 
-def format_car_alert(listing, distress_score, matched_keywords):
-    """Format car listing for Telegram"""
-    
-    # Determine alert emoji based on score
-    if distress_score >= 7:
-        emoji = "🔥🔥 EXTREME DISTRESS!"
-    elif distress_score >= 5:
-        emoji = "🔥 HOT DISTRESS"
-    elif distress_score >= 3:
-        emoji = "💰 GOOD DEAL"
-    else:
-        emoji = "🚗 NEW LISTING"
-    
-    # Format make icon
-    make_icon = {
-        'BENZ': '⭐',
-        'LEXUS': '👑',
-        'TOYOTA': '🚙'
-    }.get(listing.get('make', ''), '🚗')
-    
-    # Format keywords found
-    keywords_text = ", ".join(matched_keywords[:3]) if matched_keywords else ""
-    
-    message = (
-        f"{emoji} {make_icon}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📍 <b>{listing.get('location', 'Abuja')}</b>\n"
-        f"🚗 {listing.get('title', 'N/A')}\n"
-        f"💰 {listing.get('price', 'Contact')}\n"
-    )
-    
-    if keywords_text:
-        message += f"⚠️ <i>{keywords_text}</i>\n"
-    
-    message += (
-        f"📧 {listing.get('platform', 'Unknown')}\n"
-        f"🔗 {listing.get('url', '#')}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Found: {datetime.now().strftime('%H:%M:%S')}"
-    )
-    
-    return message
+async def get_mercedes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Get Mercedes listings."""
+    await filter_by_car_type(update, context, 'mercedes', '⭐ Mercedes-Benz')
 
-def background_scraper():
-    """Main scraping loop with REAL data"""
-    global last_scan_time, last_results, scan_count, cars_found_today
-    
-    # Wait a bit for Flask to start
-    time.sleep(5)
-    
-    # Send startup message
-    startup_msg = (
-        "🤖 <b>ABUJA CAR BOT STARTED!</b>\n\n"
-        f"✅ Real scraping ACTIVE\n"
-        f"📊 Scanning every {SCAN_INTERVAL_MINUTES} minutes\n"
-        f"📍 Target: Abuja\n"
-        f"🚗 Cars: Benz, Lexus, Toyota\n"
-        f"🌐 Platforms: Jiji (Browser), Nairaland, OList\n"
-        f"💰 Distress detection: ACTIVE\n\n"
-        f"⏰ <i>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
-    )
-    send_telegram_message(startup_msg)
-    logger.info("🤖 Bot started with BROWSER automation for Jiji!")
-    
-    while True:
-        try:
-            logger.info("🔍 Starting REAL scan cycle...")
-            scan_start = datetime.now()
-            scan_count += 1
-            
-            # Get REAL listings from scraper
-            listings = scraper.scrape_all()
-            
-            new_found = 0
-            for listing in listings:
-                # Calculate distress score
-                full_text = listing['title'] + " " + listing.get('description', '')
-                distress_score, matched = calculate_distress_score(full_text)
-                
-                # Send to Telegram (with delay between messages)
-                alert = format_car_alert(listing, distress_score, matched)
-                send_telegram_message(alert)
-                new_found += 1
-                cars_found_today += 1
-                time.sleep(2)  # Small delay between messages
-            
-            # Send summary
-            scan_time = (datetime.now() - scan_start).total_seconds()
-            summary = (
-                f"📊 <b>Scan #{scan_count} Complete</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"✅ Found: {new_found} new listings\n"
-                f"📈 Today total: {cars_found_today}\n"
-                f"⏱️ Scan took: {scan_time:.1f} seconds\n"
-                f"🔄 Next scan: in {SCAN_INTERVAL_MINUTES} minutes"
-            )
-            send_telegram_message(summary)
-            
-            last_scan_time = datetime.now()
-            last_results = listings
-            logger.info(f"✅ Scan complete. Found {new_found} cars")
-            
-            # Wait for next scan (with random offset)
-            next_run = (SCAN_INTERVAL_MINUTES * 60) + random.randint(0, 120)
-            logger.info(f"Next scan in {next_run//60} min {next_run%60} sec")
-            
-            time.sleep(next_run)
-            
-        except Exception as e:
-            logger.error(f"❌ Error in scraper: {e}")
-            send_telegram_message(f"⚠️ Bot error: {str(e)[:200]}")
-            time.sleep(300)  # Wait 5 min on error
+async def get_lexus(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Get Lexus listings."""
+    await filter_by_car_type(update, context, 'lexus', '✨ Lexus')
 
-@app.route('/')
-def home():
-    return jsonify({
-        'status': 'alive',
-        'service': 'Abuja Car Scraper Bot',
-        'mode': 'BROWSER AUTOMATION',
-        'telegram': 'Connected' if TELEGRAM_BOT_TOKEN else 'No token',
-        'scan_count': scan_count,
-        'cars_found_today': cars_found_today,
-        'last_scan': last_scan_time.isoformat() if last_scan_time else 'Never',
-        'next_scan': f'Every {SCAN_INTERVAL_MINUTES} minutes'
-    })
+async def get_toyota(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Get Toyota listings."""
+    await filter_by_car_type(update, context, 'toyota', '🌟 Toyota')
 
-@app.route('/health')
+async def filter_by_car_type(update: Update, context: ContextTypes.DEFAULT_TYPE, car_type, display_name):
+    """Filter listings by car type."""
+    await update.message.reply_text(f"🔍 Searching for {display_name} in Abuja... Please wait.")
+    
+    try:
+        loop = asyncio.get_event_loop()
+        all_listings = await loop.run_in_executor(
+            None, 
+            scraper.get_all_listings,
+            True,  # use_apify
+            20     # max_results
+        )
+        
+        # Filter for specific car type
+        filtered = [l for l in all_listings if l['car_type'] == car_type]
+        
+        if not filtered:
+            await update.message.reply_text(f"No {display_name} listings found at the moment.")
+            return
+        
+        message = f"{display_name} *IN ABUJA*\n\n"
+        for i, listing in enumerate(filtered[:10], 1):
+            distress = "🔴 " if listing['is_distress'] else ""
+            message += f"{distress}{i}. *{listing['title']}*\n"
+            message += f"💰 {listing['price']}\n"
+            message += f"📍 {listing['location']}\n"
+            message += f"[View]({listing['url']})\n\n"
+        
+        await update.message.reply_text(message, parse_mode='Markdown', disable_web_page_preview=True)
+        
+    except Exception as e:
+        logger.error(f"Error filtering by car type: {e}")
+        await update.message.reply_text("Sorry, I encountered an error. Please try again later.")
+
+# Add handlers
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(CommandHandler("help", help_command))
+telegram_app.add_handler(CommandHandler("cars", get_cars))
+telegram_app.add_handler(CommandHandler("distress", get_distress))
+telegram_app.add_handler(CommandHandler("mercedes", get_mercedes))
+telegram_app.add_handler(CommandHandler("lexus", get_lexus))
+telegram_app.add_handler(CommandHandler("toyota", get_toyota))
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """Telegram webhook endpoint."""
+    try:
+        update = Update.de_json(request.get_json(force=True), bot)
+        asyncio.run(telegram_app.process_update(update))
+        return jsonify({"status": "ok"}), 200
+    except Exception as e:
+        logger.error(f"Error processing webhook: {e}")
+        return jsonify({"status": "error"}), 500
+
+@app.route('/health', methods=['GET'])
 def health():
-    return 'OK', 200
+    """Health check endpoint."""
+    return jsonify({
+        "status": "healthy",
+        "apify_configured": bool(APIFY_TOKEN)
+    }), 200
 
-@app.route('/test')
-def test_telegram():
-    """Test endpoint to send a message"""
-    test_msg = (
-        "🧪 <b>TEST MESSAGE</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n"
-        "✅ Bot is working with BROWSER mode!\n"
-        f"📊 Scan count: {scan_count}\n"
-        f"🚗 Cars found: {cars_found_today}\n"
-        f"⏰ {datetime.now().strftime('%H:%M:%S')}"
-    )
-    result = send_telegram_message(test_msg)
-    if result:
-        return jsonify({'status': 'Test message sent to Telegram'})
-    else:
-        return jsonify({'error': 'Failed to send'}), 500
-
-@app.route('/scan')
-def force_scan():
-    """Force an immediate scan"""
-    thread = threading.Thread(target=background_scraper)
-    thread.start()
-    return jsonify({'status': 'Scan started in background'})
+@app.route('/test-scraper', methods=['GET'])
+def test_scraper():
+    """Test endpoint for scraper (protected in production)."""
+    try:
+        listings = scraper.get_all_listings(use_apify=True, max_results=3)
+        return jsonify({
+            "success": True,
+            "count": len(listings),
+            "listings": listings
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 if __name__ == '__main__':
-    # Check Telegram credentials
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        logger.warning("⚠️ Telegram credentials not set!")
-    else:
-        logger.info("✅ Telegram credentials found")
+    # Set up webhook
+    if WEBHOOK_URL:
+        webhook_url = f"{WEBHOOK_URL}/webhook"
+        asyncio.run(bot.set_webhook(url=webhook_url))
+        logger.info(f"Webhook set to {webhook_url}")
     
-    # Start background scraper
-    thread = threading.Thread(target=background_scraper, daemon=True)
-    thread.start()
-    
-    # Start Flask server
-    port = int(os.environ.get('PORT', 10000))
+    # Run Flask app
+    port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)

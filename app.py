@@ -24,15 +24,33 @@ WEBHOOK_URL = os.environ.get('RENDER_EXTERNAL_URL')
 # Initialize scraper
 scraper = CarScraper()
 
-# Initialize Telegram bot with proper initialization
+# Initialize bot (this is safe outside the function)
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
-telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-# CRITICAL FIX: Properly initialize the application
-telegram_app.initialize()
-telegram_app.start()
+# IMPORTANT: Create the application but DON'T initialize it globally
+telegram_app = None
 
-logger.info("✅ Telegram application initialized successfully")
+def get_application():
+    """Get or create the application instance"""
+    global telegram_app
+    if telegram_app is None:
+        # Build the application
+        telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+        
+        # Add handlers
+        telegram_app.add_handler(CommandHandler("start", start))
+        telegram_app.add_handler(CommandHandler("help", help_command))
+        telegram_app.add_handler(CommandHandler("cars", get_cars))
+        telegram_app.add_handler(CommandHandler("distress", get_distress))
+        telegram_app.add_handler(CommandHandler("mercedes", get_mercedes))
+        telegram_app.add_handler(CommandHandler("lexus", get_lexus))
+        telegram_app.add_handler(CommandHandler("toyota", get_toyota))
+        
+        # Initialize the application
+        telegram_app.initialize()
+        logger.info("✅ Telegram application initialized successfully")
+    
+    return telegram_app
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a welcome message when /start is issued."""
@@ -155,22 +173,17 @@ async def filter_by_car_type(update: Update, context: ContextTypes.DEFAULT_TYPE,
         logger.error(f"Error filtering by car type: {e}")
         await update.message.reply_text("Sorry, I encountered an error. Please try again later.")
 
-# Add handlers
-telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(CommandHandler("help", help_command))
-telegram_app.add_handler(CommandHandler("cars", get_cars))
-telegram_app.add_handler(CommandHandler("distress", get_distress))
-telegram_app.add_handler(CommandHandler("mercedes", get_mercedes))
-telegram_app.add_handler(CommandHandler("lexus", get_lexus))
-telegram_app.add_handler(CommandHandler("toyota", get_toyota))
-
 @app.route('/webhook', methods=['POST'])
 def webhook():
     """Telegram webhook endpoint."""
     try:
+        # Get the application (this will initialize it if needed)
+        app_instance = get_application()
+        
+        # Process the update
         update = Update.de_json(request.get_json(force=True), bot)
-        # Process the update with the initialized app
-        asyncio.run(telegram_app.process_update(update))
+        asyncio.run(app_instance.process_update(update))
+        
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         logger.error(f"Error processing webhook: {e}")

@@ -36,7 +36,7 @@ class CarScraper:
             'travelling', 'visa approved', 'ready for bargain', 'best offer'
         ]
         
-        # Backup Nairaland URL
+        # Backup Nairaland URL (keeping for reference but not actively used)
         self.nairaland_url = "https://www.nairaland.com/cars"
         
         # User agent for backup scraper
@@ -68,8 +68,8 @@ class CarScraper:
             
             logger.info(f"Starting Apify Jiji scraper")
             
-            # Run the actor
-            run = self.apify_client.actor("pocesar/jiji-scraper").call(run_input=run_input)
+            # FIXED: Updated to correct actor name
+            run = self.apify_client.actor("stealth_mode/jiji-product-search-scraper").call(run_input=run_input)
             
             # Fetch results from the dataset
             dataset_id = run["defaultDatasetId"]
@@ -180,8 +180,13 @@ class CarScraper:
     
     def scrape_nairaland_backup(self, max_pages=2):
         """
-        Backup scraper for Nairaland
-        Returns list of car listings
+        Backup scraper for Nairaland - Currently disabled due to 403 errors
+        Kept for reference but not actively used
+        """
+        logger.warning("Nairaland backup scraper is currently disabled due to 403 errors")
+        return []
+        
+        # Original code commented out below:
         """
         listings = []
         
@@ -258,6 +263,7 @@ class CarScraper:
                 logger.error(f"Error scraping Nairaland page {page}: {e}")
         
         return listings
+        """
     
     def _extract_price_from_title(self, title):
         """Extract price from title if present"""
@@ -298,10 +304,14 @@ class CarScraper:
                 logger.info(f"Found {len(jiji_listings)} listings from Apify")
                 return all_listings[:max_results]
         
+        # Nairaland backup is currently disabled due to 403 errors
+        # Uncomment the lines below if you want to try it again in the future
+        """
         # If Apify fails or returns few results, try Nairaland
         logger.info("Attempting backup scrape from Nairaland...")
         nairaland_listings = self.scrape_nairaland_backup(max_pages=2)
         all_listings.extend(nairaland_listings)
+        """
         
         # Sort by distress first, then by whatever
         all_listings.sort(key=lambda x: (-x['is_distress'], x['title']))

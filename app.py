@@ -26,43 +26,24 @@ scraper = CarScraper()
 
 # Initialize bot properly
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
-bot.initialize()  # ← THIS LINE FIXES EVERYTHING!
-logger.info("✅ Bot initialized successfully")  # Optional but nice to add
+bot.initialize()
+logger.info("✅ Bot initialized successfully")
 
-# Global variable for application
-telegram_app = None
+# Build application with the initialized bot
+telegram_app = Application.builder().bot(bot).build()
 
-async def init_application():
-    """Initialize the application asynchronously"""
-    global telegram_app
-    if telegram_app is None:
-        # Build the application
-        telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-        
-        # Add handlers
-        telegram_app.add_handler(CommandHandler("start", start))
-        telegram_app.add_handler(CommandHandler("help", help_command))
-        telegram_app.add_handler(CommandHandler("cars", get_cars))
-        telegram_app.add_handler(CommandHandler("distress", get_distress))
-        telegram_app.add_handler(CommandHandler("mercedes", get_mercedes))
-        telegram_app.add_handler(CommandHandler("lexus", get_lexus))
-        telegram_app.add_handler(CommandHandler("toyota", get_toyota))
-        
-        # Initialize the application (this is async)
-        await telegram_app.initialize()
-        logger.info("✅ Telegram application initialized successfully")
-    
-    return telegram_app
+# Add handlers to telegram_app
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(CommandHandler("help", help_command))
+telegram_app.add_handler(CommandHandler("cars", get_cars))
+telegram_app.add_handler(CommandHandler("distress", get_distress))
+telegram_app.add_handler(CommandHandler("mercedes", get_mercedes))
+telegram_app.add_handler(CommandHandler("lexus", get_lexus))
+telegram_app.add_handler(CommandHandler("toyota", get_toyota))
 
-def get_application():
-    """Synchronous wrapper for the async init function"""
-    if telegram_app is None:
-        # Create new event loop for initialization
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(init_application())
-        loop.close()
-    return telegram_app
+# Initialize the application
+telegram_app.initialize()
+logger.info("✅ Telegram application initialized successfully")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a welcome message when /start is issued."""
@@ -189,13 +170,9 @@ async def filter_by_car_type(update: Update, context: ContextTypes.DEFAULT_TYPE,
 def webhook():
     """Telegram webhook endpoint."""
     try:
-        # Get the application (this will initialize it if needed)
-        app_instance = get_application()
-        
-        # Process the update
+        # Use the already initialized telegram_app directly
         update = Update.de_json(request.get_json(force=True), bot)
-        asyncio.run(app_instance.process_update(update))
-        
+        asyncio.run(telegram_app.process_update(update))
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         logger.error(f"Error processing webhook: {e}")

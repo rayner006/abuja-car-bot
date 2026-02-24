@@ -27,11 +27,11 @@ scraper = CarScraper()
 # Initialize bot (this is safe outside the function)
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
-# IMPORTANT: Create the application but DON'T initialize it globally
+# Global variable for application
 telegram_app = None
 
-def get_application():
-    """Get or create the application instance"""
+async def init_application():
+    """Initialize the application asynchronously"""
     global telegram_app
     if telegram_app is None:
         # Build the application
@@ -46,10 +46,20 @@ def get_application():
         telegram_app.add_handler(CommandHandler("lexus", get_lexus))
         telegram_app.add_handler(CommandHandler("toyota", get_toyota))
         
-        # Initialize the application
-        telegram_app.initialize()
+        # Initialize the application (this is async)
+        await telegram_app.initialize()
         logger.info("✅ Telegram application initialized successfully")
     
+    return telegram_app
+
+def get_application():
+    """Synchronous wrapper for the async init function"""
+    if telegram_app is None:
+        # Create new event loop for initialization
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(init_application())
+        loop.close()
     return telegram_app
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):

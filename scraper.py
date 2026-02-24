@@ -1,205 +1,344 @@
 import os
 import logging
-from flask import Flask, request, jsonify
-from telegram import Bot, Update
-from telegram.ext import Application, CommandHandler, ContextTypes
-import asyncio
-from scraper import CarScraper
+import requests
+from bs4 import BeautifulSoup
+import time
+import random
+from fake_useragent import UserAgent
+from datetime import datetime
+from apify_client import ApifyClient
 
 # Configure logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize Flask app
-app = Flask(__name__)
-
-# Get environment variables
-TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
-APIFY_TOKEN = os.environ.get('APIFY_TOKEN')
-WEBHOOK_URL = os.environ.get('RENDER_EXTERNAL_URL')
-
-# Initialize scraper
-scraper = CarScraper()
-
-# Initialize Telegram bot
-bot = Bot(token=TELEGRAM_TOKEN)
-telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send a welcome message when /start is issued."""
-    welcome_message = (
-        "🚗 *Welcome to Abuja Car Finder Bot!*\n\n"
-        "I help you find cars (Benz, Lexus, Toyota Venza/Avalon/Camry) "
-        "from direct owners in Abuja.\n\n"
-        "Available commands:\n"
-        "/cars - Get latest car listings\n"
-        "/distress - Get only distress sales\n"
-        "/mercedes - Find Mercedes-Benz\n"
-        "/lexus - Find Lexus\n"
-        "/toyota - Find Toyota Venza/Avalon/Camry\n"
-        "/help - Show this message\n\n"
-        "Powered by Apify for reliable scraping! 🤖"
-    )
-    await update.message.reply_text(welcome_message, parse_mode='Markdown')
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send help message."""
-    await start(update, context)
-
-async def get_cars(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Get latest car listings."""
-    await update.message.reply_text("🔍 Searching for cars in Abuja... Please wait.")
+class CarScraper:
+    def __init__(self):
+        """Initialize the scraper with Apify client"""
+        # Apify setup
+        self.apify_token = os.environ.get('APIFY_TOKEN')
+        if not self.apify_token:
+            logger.warning("APIFY_TOKEN not found in environment variables")
+        
+        self.apify_client = ApifyClient(self.apify_token) if self.apify_token else None
+        
+        # Target car makes/models
+        self.target_cars = {
+            'mercedes': ['mercedes', 'benz', 'mercedes-benz', 'c-class', 'e-class'],
+            'lexus': ['lexus', 'rx', 'rx350', 'rx330', 'es350', 'gs300'],
+            'toyota': ['venza', 'avalon', 'camry', 'toyota venza', 'toyota avalon', 'toyota camry']
+        }
+        
+        # Distress keywords
+        self.distress_keywords = [
+            'urgent sale', 'urgent', 'distress', 'distress sale', 'price drop',
+            'must sell', 'leaving abroad', 'relocating', 'leaving nigeria',
+            'travelling', 'visa approved', 'ready for bargain', 'best offer'
+        ]
+        
+        # Backup Nairaland URL
+        self.nairaland_url = "https://www.nairaland.com/cars"
+        
+        # User agent for backup scraper
+        self.ua = UserAgent()
     
-    try:
-        # Run scraper in thread pool to avoid blocking
-        loop = asyncio.get_event_loop()
-        listings = await loop.run_in_executor(
-            None, 
-            scraper.get_all_listings,
-            True,  # use_apify
-            10     # max_results
-        )
+    def scrape_jiji_with_apify(self, max_results=10):
+        """
+        Scrape Jiji.ng using Apify's Jiji scraper
+        Returns list of car listings
+        """
+        if not self.apify_client:
+            logger.error("Apify client not initialized")
+            return []
         
-        formatted_message = scraper.format_listings_for_telegram(listings)
-        await update.message.reply_text(formatted_message, parse_mode='Markdown', disable_web_page_preview=False)
+        listings = []
         
-    except Exception as e:
-        logger.error(f"Error in get_cars: {e}")
-        await update.message.reply_text("Sorry, I encountered an error. Please try again later.")
-
-async def get_distress(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Get only distress sales."""
-    await update.message.reply_text("🔍 Searching for distress sales in Abuja... Please wait.")
+        try:
+            # Prepare the actor input for Jiji scraper
+            run_input = {
+                "searchTerms": ["mercedes benz", "lexus", "toyota venza", "toyota avalon", "toyota camry"],
+                "category": "cars",
+                "location": "Abuja",
+                "maxResults": max_results,
+                "proxyConfiguration": {
+                    "useApifyProxy": True,
+                    "apifyProxyGroups": ["RESIDENTIAL"]
+                }
+            }
+            
+            logger.info(f"Starting Apify Jiji scraper")
+            
+            # Run the actor
+            run = self.apify_client.actor("pocesar/jiji-scraper").call(run_input=run_input)
+            
+            # Fetch results from the dataset
+            dataset_id = run["defaultDatasetId"]
+            items = list(self.apify_client.dataset(dataset_id).iterate_items())
+            
+            logger.info(f"Retrieved {len(items)} items from Apify")
+            
+            # Process each item
+            for item in items:
+                listing = self._process_jiji_listing(item)
+                if listing:
+                    listings.append(listing)
+                    
+            logger.info(f"Processed {len(listings)} valid car listings from Jiji")
+            
+        except Exception as e:
+            logger.error(f"Error scraping Jiji with Apify: {e}")
+        
+        return listings
     
-    try:
-        loop = asyncio.get_event_loop()
-        all_listings = await loop.run_in_executor(
-            None, 
-            scraper.get_all_listings,
-            True,  # use_apify
-            20     # max_results
-        )
-        
-        # Filter for distress sales
-        distress_listings = [l for l in all_listings if l['is_distress']]
-        
-        if not distress_listings:
-            await update.message.reply_text("No distress sales found at the moment.")
-            return
-        
-        message = "🔴 *DISTRESS SALES IN ABUJA* 🔴\n\n"
-        for i, listing in enumerate(distress_listings[:10], 1):
-            message += f"{i}. *{listing['title']}*\n"
-            message += f"💰 {listing['price']}\n"
-            message += f"📍 {listing['location']}\n"
-            message += f"[View]({listing['url']})\n\n"
-        
-        await update.message.reply_text(message, parse_mode='Markdown', disable_web_page_preview=True)
-        
-    except Exception as e:
-        logger.error(f"Error in get_distress: {e}")
-        await update.message.reply_text("Sorry, I encountered an error. Please try again later.")
-
-async def get_mercedes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Get Mercedes listings."""
-    await filter_by_car_type(update, context, 'mercedes', '⭐ Mercedes-Benz')
-
-async def get_lexus(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Get Lexus listings."""
-    await filter_by_car_type(update, context, 'lexus', '✨ Lexus')
-
-async def get_toyota(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Get Toyota listings."""
-    await filter_by_car_type(update, context, 'toyota', '🌟 Toyota')
-
-async def filter_by_car_type(update: Update, context: ContextTypes.DEFAULT_TYPE, car_type, display_name):
-    """Filter listings by car type."""
-    await update.message.reply_text(f"🔍 Searching for {display_name} in Abuja... Please wait.")
+    def _process_jiji_listing(self, item):
+        """
+        Process a single Jiji listing from Apify data
+        Extract relevant information and check if it matches our criteria
+        """
+        try:
+            # Extract basic info
+            title = item.get('title', '')
+            description = item.get('description', '')
+            price = item.get('price', '')
+            url = item.get('url', '')
+            location = item.get('location', '')
+            images = item.get('images', [])
+            
+            # Combine title and description for searching
+            full_text = f"{title} {description}".lower()
+            
+            # Check if it's in Abuja
+            if 'abuja' not in location.lower():
+                return None
+            
+            # Check if it's one of our target cars
+            car_type = self._identify_car_type(full_text)
+            if not car_type:
+                return None
+            
+            # Check if it's a distress sale
+            is_distress = self._check_distress(full_text)
+            
+            # Format price
+            formatted_price = self._format_price(price)
+            
+            # Get first image
+            image_url = images[0] if images else None
+            
+            return {
+                'title': title,
+                'price': formatted_price,
+                'url': url,
+                'location': location,
+                'car_type': car_type,
+                'is_distress': is_distress,
+                'image_url': image_url,
+                'source': 'Jiji.ng (Apify)'
+            }
+            
+        except Exception as e:
+            logger.error(f"Error processing Jiji listing: {e}")
+            return None
     
-    try:
-        loop = asyncio.get_event_loop()
-        all_listings = await loop.run_in_executor(
-            None, 
-            scraper.get_all_listings,
-            True,  # use_apify
-            20     # max_results
-        )
+    def _identify_car_type(self, text):
+        """Identify the type of car from the text"""
+        text_lower = text.lower()
         
-        # Filter for specific car type
-        filtered = [l for l in all_listings if l['car_type'] == car_type]
+        for car_type, keywords in self.target_cars.items():
+            for keyword in keywords:
+                if keyword in text_lower:
+                    return car_type
         
-        if not filtered:
-            await update.message.reply_text(f"No {display_name} listings found at the moment.")
-            return
-        
-        message = f"{display_name} *IN ABUJA*\n\n"
-        for i, listing in enumerate(filtered[:10], 1):
-            distress = "🔴 " if listing['is_distress'] else ""
-            message += f"{distress}{i}. *{listing['title']}*\n"
-            message += f"💰 {listing['price']}\n"
-            message += f"📍 {listing['location']}\n"
-            message += f"[View]({listing['url']})\n\n"
-        
-        await update.message.reply_text(message, parse_mode='Markdown', disable_web_page_preview=True)
-        
-    except Exception as e:
-        logger.error(f"Error filtering by car type: {e}")
-        await update.message.reply_text("Sorry, I encountered an error. Please try again later.")
-
-# Add handlers
-telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(CommandHandler("help", help_command))
-telegram_app.add_handler(CommandHandler("cars", get_cars))
-telegram_app.add_handler(CommandHandler("distress", get_distress))
-telegram_app.add_handler(CommandHandler("mercedes", get_mercedes))
-telegram_app.add_handler(CommandHandler("lexus", get_lexus))
-telegram_app.add_handler(CommandHandler("toyota", get_toyota))
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    """Telegram webhook endpoint."""
-    try:
-        update = Update.de_json(request.get_json(force=True), bot)
-        asyncio.run(telegram_app.process_update(update))
-        return jsonify({"status": "ok"}), 200
-    except Exception as e:
-        logger.error(f"Error processing webhook: {e}")
-        return jsonify({"status": "error"}), 500
-
-@app.route('/health', methods=['GET'])
-def health():
-    """Health check endpoint."""
-    return jsonify({
-        "status": "healthy",
-        "apify_configured": bool(APIFY_TOKEN)
-    }), 200
-
-@app.route('/test-scraper', methods=['GET'])
-def test_scraper():
-    """Test endpoint for scraper (protected in production)."""
-    try:
-        listings = scraper.get_all_listings(use_apify=True, max_results=3)
-        return jsonify({
-            "success": True,
-            "count": len(listings),
-            "listings": listings
-        })
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
-
-if __name__ == '__main__':
-    # Set up webhook
-    if WEBHOOK_URL:
-        webhook_url = f"{WEBHOOK_URL}/webhook"
-        asyncio.run(bot.set_webhook(url=webhook_url))
-        logger.info(f"Webhook set to {webhook_url}")
+        return None
     
-    # Run Flask app
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    def _check_distress(self, text):
+        """Check if the listing contains distress keywords"""
+        text_lower = text.lower()
+        
+        for keyword in self.distress_keywords:
+            if keyword in text_lower:
+                return True
+        
+        return False
+    
+    def _format_price(self, price_str):
+        """Format price string"""
+        if not price_str:
+            return "Contact for price"
+        
+        # Clean and format price
+        try:
+            # Remove currency symbols and commas
+            clean_price = price_str.replace('₦', '').replace(',', '').strip()
+            if clean_price.isdigit():
+                # Format with commas
+                return f"₦{int(clean_price):,}"
+        except:
+            pass
+        
+        return price_str
+    
+    def scrape_nairaland_backup(self, max_pages=2):
+        """
+        Backup scraper for Nairaland
+        Returns list of car listings
+        """
+        listings = []
+        
+        for page in range(1, max_pages + 1):
+            try:
+                # Construct URL with pagination
+                if page == 1:
+                    url = self.nairaland_url
+                else:
+                    url = f"{self.nairaland_url}/{page}"
+                
+                # Add random user agent
+                headers = {
+                    'User-Agent': self.ua.random
+                }
+                
+                # Add delay to be respectful
+                time.sleep(random.uniform(2, 4))
+                
+                response = requests.get(url, headers=headers, timeout=10)
+                response.raise_for_status()
+                
+                soup = BeautifulSoup(response.text, 'html.parser')
+                
+                # Find all topic rows (Nairaland specific structure)
+                topics = soup.find_all('tr', class_='topic_row')
+                
+                for topic in topics:
+                    try:
+                        # Extract title and link
+                        title_link = topic.find('a', class_='topic_link')
+                        if not title_link:
+                            continue
+                        
+                        title = title_link.text.strip()
+                        url = f"https://www.nairaland.com{title_link.get('href')}"
+                        
+                        # Check if it's about cars and in Abuja
+                        full_text = title.lower()
+                        
+                        # Check for Abuja
+                        if 'abuja' not in full_text:
+                            continue
+                        
+                        # Check if it's one of our target cars
+                        car_type = self._identify_car_type(full_text)
+                        if not car_type:
+                            continue
+                        
+                        # Check for distress
+                        is_distress = self._check_distress(full_text)
+                        
+                        # Extract price (if mentioned in title)
+                        price = self._extract_price_from_title(title)
+                        
+                        listings.append({
+                            'title': title,
+                            'price': price,
+                            'url': url,
+                            'location': 'Abuja',
+                            'car_type': car_type,
+                            'is_distress': is_distress,
+                            'image_url': None,
+                            'source': 'Nairaland'
+                        })
+                        
+                    except Exception as e:
+                        logger.error(f"Error parsing topic: {e}")
+                        continue
+                
+                logger.info(f"Scraped page {page} of Nairaland, found {len(topics)} topics")
+                
+            except Exception as e:
+                logger.error(f"Error scraping Nairaland page {page}: {e}")
+        
+        return listings
+    
+    def _extract_price_from_title(self, title):
+        """Extract price from title if present"""
+        import re
+        
+        # Look for price patterns like "1.5m", "1.5 million", "1,500,000"
+        price_patterns = [
+            r'₦?\s*(\d+(?:\.\d+)?)\s*(?:m|million|M)',
+            r'₦?\s*(\d{1,3}(?:,\d{3})*(?:\.\d+)?)',
+            r'(\d+(?:\.\d+)?)\s*(?:m|million|M)'
+        ]
+        
+        for pattern in price_patterns:
+            match = re.search(pattern, title, re.IGNORECASE)
+            if match:
+                price_val = match.group(1).replace(',', '')
+                if 'm' in pattern or 'million' in pattern.lower():
+                    return f"₦{float(price_val):.1f}M"
+                else:
+                    return f"₦{price_val}"
+        
+        return "Price not specified"
+    
+    def get_all_listings(self, use_apify=True, max_results=10):
+        """
+        Get all car listings, primarily using Apify with Nairaland backup
+        """
+        all_listings = []
+        
+        # Try Apify first
+        if use_apify and self.apify_client:
+            logger.info("Attempting to scrape with Apify...")
+            jiji_listings = self.scrape_jiji_with_apify(max_results)
+            all_listings.extend(jiji_listings)
+            
+            # If Apify returns results, we're good
+            if len(jiji_listings) >= max_results:
+                logger.info(f"Found {len(jiji_listings)} listings from Apify")
+                return all_listings[:max_results]
+        
+        # If Apify fails or returns few results, try Nairaland
+        logger.info("Attempting backup scrape from Nairaland...")
+        nairaland_listings = self.scrape_nairaland_backup(max_pages=2)
+        all_listings.extend(nairaland_listings)
+        
+        # Sort by distress first, then by whatever
+        all_listings.sort(key=lambda x: (-x['is_distress'], x['title']))
+        
+        return all_listings[:max_results]
+    
+    def format_listings_for_telegram(self, listings):
+        """Format listings for Telegram message"""
+        if not listings:
+            return "No car listings found at the moment. Please try again later."
+        
+        message = "🚗 *Available Cars in Abuja*\n\n"
+        
+        for i, listing in enumerate(listings, 1):
+            # Add distress indicator
+            distress_badge = "🔴 *DISTRESS SALE* 🔴\n" if listing['is_distress'] else ""
+            
+            # Add car type emoji
+            car_emoji = {
+                'mercedes': '⭐',
+                'lexus': '✨',
+                'toyota': '🌟'
+            }.get(listing['car_type'], '🚗')
+            
+            message += f"{distress_badge}{car_emoji} *{listing['title']}*\n"
+            message += f"💰 *Price:* {listing['price']}\n"
+            message += f"📍 *Location:* {listing['location']}\n"
+            message += f"📱 *Source:* {listing['source']}\n"
+            message += f"🔗 [View Listing]({listing['url']})\n"
+            
+            # Add image if available
+            if listing.get('image_url'):
+                message += f"[🖼️ Image]({listing['image_url']})\n"
+            
+            message += "─" * 30 + "\n\n"
+        
+        # Add timestamp
+        message += f"🕐 *Last updated:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        
+        return message

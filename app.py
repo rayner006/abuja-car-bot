@@ -24,8 +24,10 @@ WEBHOOK_URL = os.environ.get('RENDER_EXTERNAL_URL')
 # Initialize scraper
 scraper = CarScraper()
 
-# Initialize bot (this is safe outside the function)
+# Initialize bot properly
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
+bot.initialize()  # ← THIS LINE FIXES EVERYTHING!
+logger.info("✅ Bot initialized successfully")  # Optional but nice to add
 
 # Global variable for application
 telegram_app = None

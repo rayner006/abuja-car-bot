@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # Get environment variables
-TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 APIFY_TOKEN = os.environ.get('APIFY_TOKEN')
 WEBHOOK_URL = os.environ.get('RENDER_EXTERNAL_URL')
 

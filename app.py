@@ -122,12 +122,12 @@ def background_scraper():
         f"📊 Scanning every {SCAN_INTERVAL_MINUTES} minutes\n"
         f"📍 Target: Abuja\n"
         f"🚗 Cars: Benz, Lexus, Toyota\n"
-        f"🌐 Platforms: Jiji, Nairaland, OList\n"
+        f"🌐 Platforms: Jiji (Browser), Nairaland, OList\n"
         f"💰 Distress detection: ACTIVE\n\n"
         f"⏰ <i>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
     )
     send_telegram_message(startup_msg)
-    logger.info("🤖 Bot started with REAL scraper!")
+    logger.info("🤖 Bot started with BROWSER automation for Jiji!")
     
     while True:
         try:
@@ -183,7 +183,7 @@ def home():
     return jsonify({
         'status': 'alive',
         'service': 'Abuja Car Scraper Bot',
-        'mode': 'REAL SCRAPING',
+        'mode': 'BROWSER AUTOMATION',
         'telegram': 'Connected' if TELEGRAM_BOT_TOKEN else 'No token',
         'scan_count': scan_count,
         'cars_found_today': cars_found_today,
@@ -201,7 +201,7 @@ def test_telegram():
     test_msg = (
         "🧪 <b>TEST MESSAGE</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n"
-        "✅ Bot is working!\n"
+        "✅ Bot is working with BROWSER mode!\n"
         f"📊 Scan count: {scan_count}\n"
         f"🚗 Cars found: {cars_found_today}\n"
         f"⏰ {datetime.now().strftime('%H:%M:%S')}"
@@ -215,7 +215,7 @@ def test_telegram():
 @app.route('/scan')
 def force_scan():
     """Force an immediate scan"""
-    thread = threading.Thread(target=lambda: background_scraper())
+    thread = threading.Thread(target=background_scraper)
     thread.start()
     return jsonify({'status': 'Scan started in background'})
 

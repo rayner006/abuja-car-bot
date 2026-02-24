@@ -1,5 +1,6 @@
 # ============================================
 # REAL SCRAPER FOR NIGERIAN CAR SITES
+# WITH BROWSER AUTOMATION FOR JIJI
 # ============================================
 
 import requests
@@ -9,7 +10,11 @@ import time
 import random
 from datetime import datetime
 import logging
-from fake_useragent import UserAgent
+import undetected_chromedriver as uc
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+import os
 
 from config import *
 
@@ -17,8 +22,8 @@ logger = logging.getLogger(__name__)
 
 class NigerianCarScraper:
     def __init__(self):
-        self.ua = UserAgent()
         self.session = requests.Session()
+        self.driver = None
         
     def get_headers(self):
         """Random headers to avoid blocking"""
@@ -31,9 +36,58 @@ class NigerianCarScraper:
             'Upgrade-Insecure-Requests': '1'
         }
     
-    def random_delay(self):
+    def random_delay(self, min_sec=2, max_sec=5):
         """Human-like delay"""
-        time.sleep(random.uniform(2, 5))
+        time.sleep(random.uniform(min_sec, max_sec))
+    
+    def setup_browser(self):
+        """Setup undetected Chrome browser for Jiji"""
+        try:
+            logger.info("🔧 Setting up stealth browser...")
+            options = uc.ChromeOptions()
+            
+            # Essential arguments to avoid detection
+            options.add_argument('--disable-blink-features=AutomationControlled')
+            options.add_argument('--window-size=1920,1080')
+            options.add_argument('--no-sandbox')
+            options.add_argument('--disable-dev-shm-usage')
+            options.add_argument('--disable-gpu')
+            options.add_argument('--disable-software-rasterizer')
+            options.add_argument('--disable-web-security')
+            options.add_argument('--disable-features=IsolateOrigins,site-per-process')
+            
+            # Random user agent
+            options.add_argument(f'--user-agent={random.choice(USER_AGENT_LIST)}')
+            
+            # Headless mode - faster but slightly more detectable
+            # options.add_argument('--headless=new')
+            
+            # Initialize undetected driver
+            self.driver = uc.Chrome(options=options)
+            
+            # Execute stealth scripts
+            self.driver.execute_script("""
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
+                Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+                Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
+            """)
+            
+            logger.info("✅ Browser setup complete")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Browser setup failed: {e}")
+            return False
+    
+    def close_browser(self):
+        """Close browser safely"""
+        if self.driver:
+            try:
+                self.driver.quit()
+            except:
+                pass
+            self.driver = None
     
     def scrape_nairaland(self):
         """Scrape Nairaland Autos section"""
@@ -45,24 +99,27 @@ class NigerianCarScraper:
             self.random_delay()
             
             response = self.session.get(url, headers=self.get_headers(), timeout=REQUEST_TIMEOUT)
-            soup = BeautifulSoup(response.text, 'html.parser')
+            soup = BeautifulSoup(response.text, 'html5lib')
             
             # Find all topic links
             all_links = soup.find_all('a', href=True)
-            topic_links = [l for l in all_links if '/topic/' in l['href'] and 'autos' in str(l).lower()]
+            topic_links = [l for l in all_links if '/topic/' in l['href']]
             
-            for link in topic_links[:20]:  # First 20 topics
+            for link in topic_links[:30]:  # First 30 topics
                 try:
                     title = link.text.strip()
+                    if len(title) < 10:
+                        continue
                     
                     # Check if in Abuja
-                    if not any(area in title.lower() for area in ABUJA_AREAS):
+                    title_lower = title.lower()
+                    if not any(area in title_lower for area in ABUJA_AREAS):
                         continue
                     
                     # Check if target car
                     car_make = None
                     for make, keywords in TARGET_MAKES.items():
-                        if any(kw in title.lower() for kw in keywords):
+                        if any(kw in title_lower for kw in keywords):
                             car_make = make
                             break
                     
@@ -70,7 +127,7 @@ class NigerianCarScraper:
                         continue
                     
                     # Extract price from title
-                    price_match = re.search(r'₦\s*([\d,]+)', title)
+                    price_match = re.search(r'[₦N]\s*([\d,]+)', title)
                     price = price_match.group(0) if price_match else "Contact for price"
                     
                     # Get full topic URL
@@ -78,21 +135,26 @@ class NigerianCarScraper:
                     if href.startswith('/'):
                         href = 'https://www.nairaland.com' + href
                     
-                    # Get description from topic preview if available
-                    description = title  # Default
+                    # Extract location more precisely
+                    location = 'Abuja'
+                    for area in ABUJA_AREAS:
+                        if area in title_lower:
+                            location = area.title()
+                            break
                     
                     listings.append({
                         'title': title,
                         'price': price,
-                        'location': self.extract_location_from_text(title),
+                        'location': location,
                         'url': href,
                         'platform': 'Nairaland',
                         'description': title,
                         'make': car_make
                     })
                     
+                    logger.info(f"  ✅ Nairaland: {title[:60]}...")
+                    
                 except Exception as e:
-                    logger.error(f"Error parsing Nairaland link: {e}")
                     continue
             
             logger.info(f"✅ Nairaland: Found {len(listings)} matching cars")
@@ -102,81 +164,141 @@ class NigerianCarScraper:
         
         return listings
     
-    def scrape_jiji(self):
-        """Scrape Jiji.ng - More complex with anti-bot"""
+    def scrape_jiji_with_browser(self):
+        """Use real browser to beat Jiji anti-bot"""
         listings = []
         
-        # Jiji search URLs for different makes
-        search_urls = [
-            "https://jiji.ng/cars/mercedes-benz",
-            "https://jiji.ng/cars/lexus",
-            "https://jiji.ng/cars/toyota"
-        ]
-        
-        for base_url in search_urls:
-            try:
-                logger.info(f"🌐 Scraping {base_url}...")
-                self.random_delay()
+        try:
+            if not self.setup_browser():
+                logger.error("❌ Could not start browser for Jiji")
+                return []
+            
+            makes_to_search = [
+                ('mercedes-benz', 'BENZ'),
+                ('lexus', 'LEXUS'),
+                ('toyota', 'TOYOTA')
+            ]
+            
+            for make_slug, make_name in makes_to_search:
+                url = f"https://jiji.ng/cars/{make_slug}"
+                logger.info(f"🔍 Browser searching {make_name} on Jiji...")
                 
-                response = self.session.get(base_url, headers=self.get_headers(), timeout=REQUEST_TIMEOUT)
-                soup = BeautifulSoup(response.text, 'html.parser')
-                
-                # Find listing cards - Jiji uses various classes
-                cards = soup.find_all('div', class_=re.compile('b-list-advert-base|qa-advert-list-item'))
-                
-                for card in cards[:10]:  # First 10 per category
+                try:
+                    # Navigate to page
+                    self.driver.get(url)
+                    
+                    # Random wait to mimic human
+                    self.random_delay(4, 8)
+                    
+                    # Scroll slowly like a human
+                    for i in range(random.randint(2, 4)):
+                        scroll = random.randint(300, 700)
+                        self.driver.execute_script(f"window.scrollBy(0, {scroll});")
+                        self.random_delay(0.5, 1.5)
+                    
+                    # Wait for listings to load
                     try:
-                        # Extract title
-                        title_elem = card.find('div', class_=re.compile('title')) or card.find('h3')
-                        if not title_elem:
-                            continue
-                        title = title_elem.text.strip()
-                        
-                        # Check Abuja location
-                        page_text = card.text.lower()
-                        if not any(area in page_text for area in ABUJA_AREAS):
-                            continue
-                        
-                        # Extract price
-                        price_elem = card.find('div', class_=re.compile('price')) or card.find('span', class_=re.compile('price'))
-                        price = price_elem.text.strip() if price_elem else "Contact"
-                        
-                        # Extract link
-                        link_elem = card.find('a', href=True)
-                        link = link_elem['href'] if link_elem else ""
-                        if link and not link.startswith('http'):
-                            link = 'https://jiji.ng' + link
-                        
-                        # Determine make from title
-                        car_make = None
-                        for make, keywords in TARGET_MAKES.items():
-                            if any(kw in title.lower() for kw in keywords):
-                                car_make = make
-                                break
-                        
-                        if car_make:
+                        WebDriverWait(self.driver, 15).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, "[class*='b-list-advert-base'], [class*='qa-advert']"))
+                        )
+                    except:
+                        logger.warning(f"⚠️ No listings loaded for {make_name}, may be blocked")
+                        continue
+                    
+                    # Get page source after JavaScript loads
+                    page_source = self.driver.page_source
+                    soup = BeautifulSoup(page_source, 'html5lib')
+                    
+                    # Find all listing cards
+                    cards = soup.find_all('div', class_=re.compile('b-list-advert-base|qa-advert-list-item'))
+                    
+                    if not cards:
+                        # Try alternative selectors
+                        cards = soup.find_all('a', href=re.compile(r'/cars/\d+'))
+                    
+                    logger.info(f"  Found {len(cards)} potential cards for {make_name}")
+                    
+                    for card in cards[:15]:  # First 15 per make
+                        try:
+                            # Extract title
+                            title_elem = card.find(['div', 'h3', 'span'], class_=re.compile('title|name|description'))
+                            if not title_elem:
+                                title_elem = card.find('a')
+                            if not title_elem:
+                                continue
+                                
+                            title = title_elem.text.strip()
+                            if len(title) < 5:
+                                continue
+                            
+                            # Check Abuja location
+                            card_text = card.text.lower()
+                            if not any(area in card_text for area in ABUJA_AREAS):
+                                continue
+                            
+                            # Extract price
+                            price_elem = card.find(['div', 'span'], class_=re.compile('price|amount'))
+                            price = price_elem.text.strip() if price_elem else "Contact"
+                            
+                            # Extract link
+                            link_elem = card.find('a', href=True)
+                            link = link_elem['href'] if link_elem else ""
+                            if link and not link.startswith('http'):
+                                link = 'https://jiji.ng' + link
+                            
+                            # Double-check make from title
+                            title_lower = title.lower()
+                            car_make = make_name  # Default to current search
+                            
+                            # Verify it's actually the right make
+                            if make_name == 'BENZ' and not any(kw in title_lower for kw in TARGET_MAKES['BENZ']):
+                                continue
+                            if make_name == 'LEXUS' and not any(kw in title_lower for kw in TARGET_MAKES['LEXUS']):
+                                continue
+                            if make_name == 'TOYOTA' and not any(kw in title_lower for kw in TARGET_MAKES['TOYOTA']):
+                                continue
+                            
+                            # Extract location
+                            location = 'Abuja'
+                            for area in ABUJA_AREAS:
+                                if area in card_text:
+                                    location = area.title()
+                                    break
+                            
                             listings.append({
                                 'title': title,
                                 'price': price,
-                                'location': self.extract_location_from_text(title + " " + page_text),
+                                'location': location,
                                 'url': link,
-                                'platform': 'Jiji.ng',
+                                'platform': f'Jiji.ng ({make_name})',
                                 'description': title,
                                 'make': car_make
                             })
                             
-                    except Exception as e:
-                        continue
-                        
-            except Exception as e:
-                logger.error(f"❌ Jiji scrape failed for {base_url}: {e}")
-                continue
+                            logger.info(f"  ✅ Jiji {make_name}: {title[:50]}...")
+                            
+                        except Exception as e:
+                            continue
+                    
+                    # Random delay between makes
+                    self.random_delay(5, 10)
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error scraping {make_name}: {e}")
+                    continue
+            
+            logger.info(f"✅ Jiji browser scrape complete: {len(listings)} cars")
+            
+        except Exception as e:
+            logger.error(f"❌ Jiji browser scrape failed: {e}")
         
-        logger.info(f"✅ Jiji: Found {len(listings)} matching cars")
+        finally:
+            self.close_browser()
+        
         return listings
     
     def scrape_olist(self):
-        """Scrape OList.ng"""
+        """Scrape OList.ng with better error handling"""
         listings = []
         url = "https://olist.ng/cars/abuja"
         
@@ -184,37 +306,56 @@ class NigerianCarScraper:
             logger.info("🌐 Scraping OList...")
             self.random_delay()
             
-            response = self.session.get(url, headers=self.get_headers(), timeout=REQUEST_TIMEOUT)
-            soup = BeautifulSoup(response.text, 'html.parser')
+            # Try with and without www
+            urls_to_try = [
+                "https://olist.ng/cars/abuja",
+                "https://www.olist.ng/cars/abuja"
+            ]
+            
+            response = None
+            for test_url in urls_to_try:
+                try:
+                    response = self.session.get(test_url, headers=self.get_headers(), timeout=10)
+                    if response.status_code == 200:
+                        logger.info(f"✅ OList accessible via {test_url}")
+                        break
+                except:
+                    continue
+            
+            if not response or response.status_code != 200:
+                logger.warning("⚠️ OList not accessible, skipping...")
+                return []
+            
+            soup = BeautifulSoup(response.text, 'html5lib')
             
             # Find listing items
-            items = soup.find_all('div', class_=re.compile('listing|item|ad'))
+            items = soup.find_all('div', class_=re.compile('listing|item|ad|card'))
             
             for item in items[:20]:
                 try:
-                    title_elem = item.find('h3') or item.find('h4') or item.find('a')
+                    title_elem = item.find('h3') or item.find('h4') or item.find('a') or item.find('span', class_=re.compile('title'))
                     if not title_elem:
                         continue
                     title = title_elem.text.strip()
                     
                     # Check if target car
+                    title_lower = title.lower()
                     car_make = None
                     for make, keywords in TARGET_MAKES.items():
-                        if any(kw in title.lower() for kw in keywords):
+                        if any(kw in title_lower for kw in keywords):
                             car_make = make
                             break
                     
                     if not car_make:
                         continue
                     
-                    # Location already filtered by URL (Abuja)
-                    
                     # Extract price
                     price_elem = item.find('span', class_=re.compile('price')) or item.find('div', class_=re.compile('price'))
                     price = price_elem.text.strip() if price_elem else "Contact"
                     
                     # Extract link
-                    link = title_elem['href'] if title_elem.name == 'a' and title_elem.has_attr('href') else ""
+                    link_elem = item.find('a', href=True)
+                    link = link_elem['href'] if link_elem else ""
                     if link and not link.startswith('http'):
                         link = 'https://olist.ng' + link
                     
@@ -228,11 +369,13 @@ class NigerianCarScraper:
                         'make': car_make
                     })
                     
+                    logger.info(f"  ✅ OList: {title[:50]}...")
+                    
                 except Exception:
                     continue
                     
         except Exception as e:
-            logger.error(f"❌ OList scrape failed: {e}")
+            logger.warning(f"⚠️ OList scrape failed (non-critical): {e}")
         
         logger.info(f"✅ OList: Found {len(listings)} matching cars")
         return listings
@@ -249,10 +392,23 @@ class NigerianCarScraper:
         """Run all scrapers"""
         all_listings = []
         
-        # Scrape from all platforms
-        all_listings.extend(self.scrape_nairaland())
-        all_listings.extend(self.scrape_olist())
-        all_listings.extend(self.scrape_jiji())
+        # 1. Nairaland (always works)
+        try:
+            all_listings.extend(self.scrape_nairaland())
+        except Exception as e:
+            logger.error(f"Nairaland failed: {e}")
+        
+        # 2. OList (if accessible)
+        try:
+            all_listings.extend(self.scrape_olist())
+        except Exception as e:
+            logger.warning(f"OList failed: {e}")
+        
+        # 3. Jiji with browser automation (best chance)
+        try:
+            all_listings.extend(self.scrape_jiji_with_browser())
+        except Exception as e:
+            logger.error(f"Jiji browser method failed: {e}")
         
         # Remove duplicates (by URL)
         unique = []

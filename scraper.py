@@ -1,15 +1,12 @@
 # ============================================
-# ULTIMATE SCRAPER WITH SELENIUM-WIRE + PROXIES
-# Combines undetected-chromedriver with authenticated proxies
+# ULTIMATE SCRAPER WITH FREE PROXY ROTATION
+# Combines undetected-chromedriver with free proxy pool
 # ============================================
 
-# UPDATED IMPORTS
 import undetected_chromedriver as uc
-from seleniumwire import webdriver as wire_webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
 import time
 import random
 import logging
@@ -17,6 +14,7 @@ import re
 from bs4 import BeautifulSoup
 import os
 import itertools
+import requests
 from fake_useragent import UserAgent
 
 from config import *
@@ -30,96 +28,111 @@ class NigerianCarScraper:
         self.proxy_generator = None
         self.ua = UserAgent()
         
-    def load_proxy_pool(self):
-        """
-        Load proxies from environment variable or file
-        Format: http://username:password@host:port
-        """
+    def load_free_proxies(self):
+        """Fetch free proxies from public sources"""
         try:
-            # Check if proxy list is set in environment
-            proxy_string = os.environ.get('PROXY_LIST')
+            logger.info("🌐 Loading free proxies...")
             
-            if proxy_string:
-                # Parse comma-separated proxies
-                self.proxy_pool = [p.strip() for p in proxy_string.split(',')]
-                logger.info(f"✅ Loaded {len(self.proxy_pool)} proxies from environment")
+            # Get free proxies from multiple sources
+            proxy_sources = [
+                'https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all',
+                'https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt',
+                'https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt',
+                'https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt'
+            ]
+            
+            all_proxies = []
+            for source in proxy_sources:
+                try:
+                    logger.info(f"  Fetching from {source.split('/')[2]}...")
+                    response = requests.get(source, timeout=10)
+                    if response.status_code == 200:
+                        proxies = response.text.strip().split('\n')
+                        # Clean proxies (remove whitespace)
+                        proxies = [p.strip() for p in proxies if p.strip()]
+                        all_proxies.extend(proxies)
+                        logger.info(f"  Got {len(proxies)} proxies from {source.split('/')[2]}")
+                except Exception as e:
+                    logger.warning(f"  Failed to fetch from {source}: {e}")
+                    continue
+            
+            # Remove duplicates
+            all_proxies = list(set(all_proxies))
+            logger.info(f"  Total unique proxies before testing: {len(all_proxies)}")
+            
+            # Test each proxy quickly (test first 50 for speed)
+            working = []
+            tested = 0
+            for proxy in all_proxies[:50]:
+                tested += 1
+                try:
+                    # Quick connectivity test
+                    test = requests.get(
+                        'http://httpbin.org/ip', 
+                        proxies={'http': f'http://{proxy}', 'https': f'http://{proxy}'},
+                        timeout=3
+                    )
+                    if test.status_code == 200:
+                        working.append(proxy)
+                        logger.info(f"  ✅ Proxy {proxy} works")
+                except:
+                    continue
+            
+            self.proxy_pool = working
+            logger.info(f"✅ Loaded {len(working)} working free proxies out of {tested} tested")
+            
+            # Create rotation generator
+            if self.proxy_pool:
+                random.shuffle(self.proxy_pool)
+                self.proxy_generator = itertools.cycle(self.proxy_pool)
+                return True
             else:
-                # Use free proxies for testing (these are examples - replace with real ones)
-                logger.warning("⚠️ No proxies in environment, using test proxies")
-                self.proxy_pool = [
-                    "http://20.44.189.184:3129",
-                    "http://23.247.136.245:80",
-                    "http://133.130.107.58:80",
-                ]
-            
-            # Shuffle and create rotation generator
-            random.shuffle(self.proxy_pool)
-            self.proxy_generator = itertools.cycle(self.proxy_pool)
-            
+                logger.warning("⚠️ No working proxies found")
+                return False
+                
         except Exception as e:
-            logger.error(f"❌ Failed to load proxy pool: {e}")
-            self.proxy_pool = []
-    
+            logger.error(f"❌ Failed to load proxies: {e}")
+            return False
+
     def get_next_proxy(self):
         """Get next proxy from rotation pool"""
-        if self.proxy_generator:
+        if hasattr(self, 'proxy_generator') and self.proxy_generator:
             return next(self.proxy_generator)
         return None
-    
-    def setup_stealth_browser(self, proxy_string=None):
-        """
-        Setup undetected Chrome with selenium-wire for stealth + proxies
-        This combines both technologies to bypass Jiji's blocks
-        """
+
+    def setup_browser_with_proxy(self, proxy_string=None):
+        """Setup browser with specific proxy (optional)"""
         try:
-            logger.info("🔧 Setting up stealth browser with selenium-wire...")
-            
-            # Configure selenium-wire options for proxy
-            seleniumwire_options = {}
-            
             if proxy_string:
-                seleniumwire_options = {
-                    'proxy': {
-                        'http': proxy_string,
-                        'https': proxy_string,
-                        'no_proxy': 'localhost,127.0.0.1',
-                    },
-                    'verify_ssl': False,  # Some proxies have SSL issues
-                }
-                # Log only host:port, hide credentials
-                clean_proxy = proxy_string.split('@')[-1] if '@' in proxy_string else proxy_string
-                logger.info(f"  Using proxy: {clean_proxy}")
+                logger.info(f"🔧 Setting up browser with proxy: {proxy_string}")
+            else:
+                logger.info("🔧 Setting up browser without proxy...")
             
-            # Configure undetected Chrome options
-            chrome_options = uc.ChromeOptions()
+            options = uc.ChromeOptions()
             
-            # Essential stealth arguments
-            chrome_options.add_argument('--no-sandbox')
-            chrome_options.add_argument('--disable-dev-shm-usage')
-            chrome_options.add_argument('--disable-gpu')
-            chrome_options.add_argument('--window-size=1920,1080')
-            chrome_options.add_argument('--disable-blink-features=AutomationControlled')
-            chrome_options.add_argument('--ignore-certificate-errors')
-            chrome_options.add_argument('--disable-web-security')
-            chrome_options.add_argument('--disable-features=IsolateOrigins,site-per-process')
-            chrome_options.add_argument('--disable-javascript')  # Some sites detect JS patterns
+            # Essential arguments
+            options.add_argument('--no-sandbox')
+            options.add_argument('--disable-dev-shm-usage')
+            options.add_argument('--disable-gpu')
+            options.add_argument('--window-size=1920,1080')
+            options.add_argument('--disable-blink-features=AutomationControlled')
+            options.add_argument('--ignore-certificate-errors')
+            options.add_argument('--disable-web-security')
+            
+            # Add proxy if provided
+            if proxy_string:
+                options.add_argument(f'--proxy-server=http://{proxy_string}')
             
             # Random user agent
-            chrome_options.add_argument(f'--user-agent={self.ua.random}')
+            options.add_argument(f'--user-agent={self.ua.random}')
             
-            # Additional arguments for stealth
-            chrome_options.add_argument('--lang=en-US,en')
-            chrome_options.add_argument('--disable-notifications')
-            chrome_options.add_argument('--disable-popup-blocking')
+            # Language settings
+            options.add_argument('--lang=en-US,en')
             
-            # Initialize the driver with both undetected-chrome and selenium-wire
-            # This is the magic combination!
-            self.driver = uc.Chrome(
-                options=chrome_options,
-                seleniumwire_options=seleniumwire_options
-            )
+            # Initialize undetected Chrome
+            self.driver = uc.Chrome(options=options)
             
-            # Execute stealth JavaScript
+            # Apply stealth JavaScript
             self.driver.execute_script("""
                 // Remove webdriver property
                 Object.defineProperty(navigator, 'webdriver', {
@@ -136,32 +149,26 @@ class NigerianCarScraper:
                     get: () => ['en-US', 'en']
                 });
                 
-                // Add chrome runtime (makes it look like real Chrome)
+                // Add chrome runtime
                 window.chrome = {
                     runtime: {}
                 };
-                
-                // Override permissions
-                const originalQuery = window.navigator.permissions.query;
-                window.navigator.permissions.query = (parameters) => (
-                    parameters.name === 'notifications' ?
-                        Promise.resolve({ state: Notification.permission }) :
-                        originalQuery(parameters)
-                );
             """)
             
-            logger.info("✅ Stealth browser setup complete" + 
-                       (" with proxy" if proxy_string else ""))
+            if proxy_string:
+                logger.info(f"✅ Browser setup complete with proxy: {proxy_string}")
+            else:
+                logger.info("✅ Browser setup complete without proxy")
             return True
             
         except Exception as e:
             logger.error(f"❌ Browser setup failed: {e}")
             return False
-    
+
     def random_delay(self, min_sec=2, max_sec=5):
         """Human-like delay with random jitter"""
         time.sleep(random.uniform(min_sec, max_sec))
-    
+
     def human_scroll(self):
         """Scroll like a human with natural pauses"""
         scroll_amount = random.randint(300, 700)
@@ -173,39 +180,28 @@ class NigerianCarScraper:
             scroll_back = random.randint(50, 150)
             self.driver.execute_script(f"window.scrollBy(0, -{scroll_back});")
             self.random_delay(0.3, 0.8)
-    
-    def human_mouse_movement(self, element=None):
-        """
-        Simulate human mouse movement
-        Note: This is basic - for full humanization, we'd need more complex patterns
-        """
-        try:
-            if element:
-                # Move to element with random offset
-                from selenium.webdriver.common.action_chains import ActionChains
-                actions = ActionChains(self.driver)
-                actions.move_to_element_with_offset(
-                    element, 
-                    random.randint(5, 15), 
-                    random.randint(5, 15)
-                ).perform()
-                self.random_delay(0.2, 0.5)
-        except:
-            pass
-    
+
+    def calculate_distress_score(self, text):
+        """Calculate distress score based on keywords"""
+        text_lower = text.lower()
+        score = 0
+        matched = []
+        
+        for keyword, weight in ALL_DISTRESS.items():
+            if keyword in text_lower:
+                score += weight
+                matched.append(keyword)
+        
+        return score, matched
+
     def scrape_jiji_stealth(self):
-        """
-        Ultimate Jiji scraper with:
-        - Undetected ChromeDriver (evades detection)
-        - Selenium-wire (authenticated proxies)
-        - Human-like behavior
-        - Multiple retry attempts
-        """
+        """Jiji scraper with stealth + FREE PROXY ROTATION"""
         listings = []
         
         try:
-            # Load proxy pool first
-            self.load_proxy_pool()
+            # Load free proxies first
+            if not self.load_free_proxies():
+                logger.warning("⚠️ No free proxies available, will try without proxy...")
             
             makes_to_search = [
                 ('mercedes-benz', 'BENZ'),
@@ -216,15 +212,21 @@ class NigerianCarScraper:
             for make_slug, make_name in makes_to_search:
                 logger.info(f"🎯 Targeting {make_name} in Abuja...")
                 
-                # Try up to 3 different proxies for each make
-                for attempt in range(3):
-                    proxy = self.get_next_proxy()
-                    logger.info(f"  Attempt {attempt+1}/3 for {make_name}")
+                # Try with different proxies (or without)
+                max_attempts = max(3, len(self.proxy_pool)) if self.proxy_pool else 1
+                
+                for attempt in range(max_attempts):
+                    proxy = self.get_next_proxy() if self.proxy_pool else None
+                    
+                    if proxy:
+                        logger.info(f"  Attempt {attempt+1}/{max_attempts} for {make_name} with proxy: {proxy}")
+                    else:
+                        logger.info(f"  Attempt {attempt+1}/{max_attempts} for {make_name} without proxy")
                     
                     try:
-                        # Setup browser with this proxy
-                        if not self.setup_stealth_browser(proxy):
-                            logger.warning("  Browser setup failed, trying next proxy...")
+                        # Setup browser with this proxy (or without)
+                        if not self.setup_browser_with_proxy(proxy):
+                            logger.warning("  Browser setup failed, trying next...")
                             continue
                         
                         url = f"https://jiji.ng/cars/{make_slug}"
@@ -236,13 +238,13 @@ class NigerianCarScraper:
                         # Navigate to page
                         self.driver.get(url)
                         
-                        # Random delay after load (human behavior)
+                        # Random delay after load
                         self.random_delay(4, 8)
                         
                         # Scroll naturally
                         self.human_scroll()
                         
-                        # Wait for content to load
+                        # Wait for content
                         time.sleep(random.uniform(2, 4))
                         
                         # Get page source and analyze
@@ -251,12 +253,13 @@ class NigerianCarScraper:
                         logger.info(f"  📊 Page length: {page_length} chars")
                         
                         # Check for blocking indicators
-                        if "captcha" in page_source.lower():
-                            logger.warning(f"  ⚠️ Captcha detected with this proxy")
+                        page_lower = page_source.lower()
+                        if "captcha" in page_lower:
+                            logger.warning(f"  ⚠️ Captcha detected")
                             self.driver.quit()
                             continue
-                        elif "403" in page_source or "forbidden" in page_source.lower():
-                            logger.warning(f"  ⚠️ 403 Forbidden with this proxy")
+                        elif "403" in page_lower or "forbidden" in page_lower:
+                            logger.warning(f"  ⚠️ 403 Forbidden detected")
                             self.driver.quit()
                             continue
                         elif page_length < 50000:
@@ -285,7 +288,7 @@ class NigerianCarScraper:
                                 break
                         
                         if not cards:
-                            # Try finding any div with car-like content
+                            # Try fallback - look for divs with images
                             all_divs = soup.find_all('div')
                             cards = [div for div in all_divs if div.find('img') and len(div.text) > 100]
                             logger.info(f"  Found {len(cards)} cards using fallback method")
@@ -387,22 +390,9 @@ class NigerianCarScraper:
                     pass
         
         return listings
-    
-    def calculate_distress_score(self, text):
-        """Calculate distress score based on keywords"""
-        text_lower = text.lower()
-        score = 0
-        matched = []
-        
-        for keyword, weight in ALL_DISTRESS.items():
-            if keyword in text_lower:
-                score += weight
-                matched.append(keyword)
-        
-        return score, matched
-    
+
     def scrape_nairaland(self):
-        """Keep your existing Nairaland code"""
+        """Scrape Nairaland Autos section"""
         listings = []
         url = "https://www.nairaland.com/autos"
         
@@ -410,7 +400,8 @@ class NigerianCarScraper:
             logger.info("🌐 Scraping Nairaland...")
             self.random_delay()
             
-            response = requests.get(url, headers={'User-Agent': self.ua.random}, timeout=REQUEST_TIMEOUT)
+            headers = {'User-Agent': self.ua.random}
+            response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
             soup = BeautifulSoup(response.text, 'html5lib')
             
             # Find all topic links
@@ -462,6 +453,8 @@ class NigerianCarScraper:
                         'distress_keywords': matched[:3] if matched else []
                     })
                     
+                    logger.info(f"  ✅ Nairaland: {title[:60]}...")
+                    
                 except Exception:
                     continue
             
@@ -471,12 +464,82 @@ class NigerianCarScraper:
             logger.error(f"❌ Nairaland failed: {e}")
         
         return listings
-    
+
     def scrape_olist(self):
-        """Keep your existing OList code"""
-        # Your existing OList code here
-        return []
-    
+        """Scrape OList.ng"""
+        listings = []
+        url = "https://olist.ng/cars/abuja"
+        
+        try:
+            logger.info("🌐 Scraping OList...")
+            self.random_delay()
+            
+            headers = {'User-Agent': self.ua.random}
+            response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+            
+            if response.status_code != 200:
+                logger.warning("⚠️ OList not accessible")
+                return []
+            
+            soup = BeautifulSoup(response.text, 'html5lib')
+            
+            # Find listing items
+            items = soup.find_all('div', class_=re.compile('listing|item|ad|card'))
+            
+            for item in items[:20]:
+                try:
+                    title_elem = item.find('h3') or item.find('h4') or item.find('a')
+                    if not title_elem:
+                        continue
+                    title = title_elem.text.strip()
+                    
+                    # Check if target car
+                    title_lower = title.lower()
+                    car_make = None
+                    for make, keywords in TARGET_MAKES.items():
+                        if any(kw in title_lower for kw in keywords):
+                            car_make = make
+                            break
+                    
+                    if not car_make:
+                        continue
+                    
+                    # Extract price
+                    price_elem = item.find('span', class_=re.compile('price')) or item.find('div', class_=re.compile('price'))
+                    price = price_elem.text.strip() if price_elem else "Contact"
+                    
+                    # Extract link
+                    link_elem = item.find('a', href=True)
+                    link = link_elem['href'] if link_elem else ""
+                    if link and not link.startswith('http'):
+                        link = 'https://olist.ng' + link
+                    
+                    # Calculate distress score
+                    distress_score, matched = self.calculate_distress_score(title)
+                    
+                    listings.append({
+                        'title': title,
+                        'price': price,
+                        'location': 'Abuja',
+                        'url': link,
+                        'platform': 'OList.ng',
+                        'description': title,
+                        'make': car_make,
+                        'distress_score': distress_score,
+                        'distress_keywords': matched[:3] if matched else []
+                    })
+                    
+                    logger.info(f"  ✅ OList: {title[:60]}...")
+                    
+                except Exception:
+                    continue
+                    
+        except Exception as e:
+            logger.warning(f"⚠️ OList scrape failed: {e}")
+        
+        logger.info(f"✅ OList: Found {len(listings)} cars")
+        return listings
+
     def scrape_all(self):
         """Run all scrapers"""
         all_listings = []

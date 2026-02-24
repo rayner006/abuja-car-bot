@@ -19,7 +19,7 @@ app = Flask(__name__)
 # Get environment variables
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 APIFY_TOKEN = os.environ.get('APIFY_TOKEN')
-WEBHOOK_URL = os.environ.get('RENDER_EXTERNAL_URL')  # Set by Render
+WEBHOOK_URL = os.environ.get('RENDER_EXTERNAL_URL')
 
 # Initialize scraper
 scraper = CarScraper()

@@ -8,7 +8,7 @@ from scraper import CarScraper
 
 # Configure logging
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
@@ -24,9 +24,9 @@ WEBHOOK_URL = os.environ.get('RENDER_EXTERNAL_URL')
 # Initialize scraper
 scraper = CarScraper()
 
-# Initialize Telegram bot
-bot = Bot(token=TELEGRAM_TOKEN)
-telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
+# Initialize Telegram bot - FIXED: Using TELEGRAM_BOT_TOKEN
+bot = Bot(token=TELEGRAM_BOT_TOKEN)
+telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a welcome message when /start is issued."""
@@ -194,8 +194,8 @@ def test_scraper():
         }), 500
 
 if __name__ == '__main__':
-    # Set up webhook
-    if WEBHOOK_URL:
+    # Set up webhook - FIXED: Using TELEGRAM_BOT_TOKEN
+    if WEBHOOK_URL and TELEGRAM_BOT_TOKEN:
         webhook_url = f"{WEBHOOK_URL}/webhook"
         asyncio.run(bot.set_webhook(url=webhook_url))
         logger.info(f"Webhook set to {webhook_url}")

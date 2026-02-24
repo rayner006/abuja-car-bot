@@ -1,577 +1,205 @@
-# ============================================
-# ULTIMATE SCRAPER WITH FREE PROXY ROTATION
-# Combines undetected-chromedriver with free proxy pool
-# ============================================
-
-import undetected_chromedriver as uc
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-import time
-import random
-import logging
-import re
-from bs4 import BeautifulSoup
 import os
-import itertools
-import requests
-from fake_useragent import UserAgent
+import logging
+from flask import Flask, request, jsonify
+from telegram import Bot, Update
+from telegram.ext import Application, CommandHandler, ContextTypes
+import asyncio
+from scraper import CarScraper
 
-from config import *
-
+# Configure logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
-class NigerianCarScraper:
-    def __init__(self):
-        self.driver = None
-        self.proxy_pool = []
-        self.proxy_generator = None
-        self.ua = UserAgent()
-        
-    def load_free_proxies(self):
-        """Fetch free proxies from public sources"""
-        try:
-            logger.info("🌐 Loading free proxies...")
-            
-            # Get free proxies from multiple sources
-            proxy_sources = [
-                'https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all',
-                'https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt',
-                'https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt',
-                'https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt'
-            ]
-            
-            all_proxies = []
-            for source in proxy_sources:
-                try:
-                    logger.info(f"  Fetching from {source.split('/')[2]}...")
-                    response = requests.get(source, timeout=10)
-                    if response.status_code == 200:
-                        proxies = response.text.strip().split('\n')
-                        # Clean proxies (remove whitespace)
-                        proxies = [p.strip() for p in proxies if p.strip()]
-                        all_proxies.extend(proxies)
-                        logger.info(f"  Got {len(proxies)} proxies from {source.split('/')[2]}")
-                except Exception as e:
-                    logger.warning(f"  Failed to fetch from {source}: {e}")
-                    continue
-            
-            # Remove duplicates
-            all_proxies = list(set(all_proxies))
-            logger.info(f"  Total unique proxies before testing: {len(all_proxies)}")
-            
-            # Test each proxy quickly (test first 50 for speed)
-            working = []
-            tested = 0
-            for proxy in all_proxies[:50]:
-                tested += 1
-                try:
-                    # Quick connectivity test
-                    test = requests.get(
-                        'http://httpbin.org/ip', 
-                        proxies={'http': f'http://{proxy}', 'https': f'http://{proxy}'},
-                        timeout=3
-                    )
-                    if test.status_code == 200:
-                        working.append(proxy)
-                        logger.info(f"  ✅ Proxy {proxy} works")
-                except:
-                    continue
-            
-            self.proxy_pool = working
-            logger.info(f"✅ Loaded {len(working)} working free proxies out of {tested} tested")
-            
-            # Create rotation generator
-            if self.proxy_pool:
-                random.shuffle(self.proxy_pool)
-                self.proxy_generator = itertools.cycle(self.proxy_pool)
-                return True
-            else:
-                logger.warning("⚠️ No working proxies found")
-                return False
-                
-        except Exception as e:
-            logger.error(f"❌ Failed to load proxies: {e}")
-            return False
+# Initialize Flask app
+app = Flask(__name__)
 
-    def get_next_proxy(self):
-        """Get next proxy from rotation pool"""
-        if hasattr(self, 'proxy_generator') and self.proxy_generator:
-            return next(self.proxy_generator)
-        return None
+# Get environment variables
+TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
+APIFY_TOKEN = os.environ.get('APIFY_TOKEN')
+WEBHOOK_URL = os.environ.get('RENDER_EXTERNAL_URL')  # Set by Render
 
-    def setup_browser_with_proxy(self, proxy_string=None):
-        """Setup browser with specific proxy (optional)"""
-        try:
-            if proxy_string:
-                logger.info(f"🔧 Setting up browser with proxy: {proxy_string}")
-            else:
-                logger.info("🔧 Setting up browser without proxy...")
-            
-            options = uc.ChromeOptions()
-            
-            # Essential arguments
-            options.add_argument('--no-sandbox')
-            options.add_argument('--disable-dev-shm-usage')
-            options.add_argument('--disable-gpu')
-            options.add_argument('--window-size=1920,1080')
-            options.add_argument('--disable-blink-features=AutomationControlled')
-            options.add_argument('--ignore-certificate-errors')
-            options.add_argument('--disable-web-security')
-            
-            # Add proxy if provided
-            if proxy_string:
-                options.add_argument(f'--proxy-server=http://{proxy_string}')
-            
-            # Random user agent
-            options.add_argument(f'--user-agent={self.ua.random}')
-            
-            # Language settings
-            options.add_argument('--lang=en-US,en')
-            
-            # Initialize undetected Chrome
-            self.driver = uc.Chrome(options=options)
-            
-            # Apply stealth JavaScript
-            self.driver.execute_script("""
-                // Remove webdriver property
-                Object.defineProperty(navigator, 'webdriver', {
-                    get: () => undefined
-                });
-                
-                // Add realistic plugins
-                Object.defineProperty(navigator, 'plugins', {
-                    get: () => [1, 2, 3, 4, 5]
-                });
-                
-                // Set languages
-                Object.defineProperty(navigator, 'languages', {
-                    get: () => ['en-US', 'en']
-                });
-                
-                // Add chrome runtime
-                window.chrome = {
-                    runtime: {}
-                };
-            """)
-            
-            if proxy_string:
-                logger.info(f"✅ Browser setup complete with proxy: {proxy_string}")
-            else:
-                logger.info("✅ Browser setup complete without proxy")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Browser setup failed: {e}")
-            return False
+# Initialize scraper
+scraper = CarScraper()
 
-    def random_delay(self, min_sec=2, max_sec=5):
-        """Human-like delay with random jitter"""
-        time.sleep(random.uniform(min_sec, max_sec))
+# Initialize Telegram bot
+bot = Bot(token=TELEGRAM_TOKEN)
+telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    def human_scroll(self):
-        """Scroll like a human with natural pauses"""
-        scroll_amount = random.randint(300, 700)
-        self.driver.execute_script(f"window.scrollBy(0, {scroll_amount});")
-        self.random_delay(0.5, 1.5)
-        
-        # Sometimes scroll back a bit (humans overshoot)
-        if random.random() > 0.7:
-            scroll_back = random.randint(50, 150)
-            self.driver.execute_script(f"window.scrollBy(0, -{scroll_back});")
-            self.random_delay(0.3, 0.8)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send a welcome message when /start is issued."""
+    welcome_message = (
+        "🚗 *Welcome to Abuja Car Finder Bot!*\n\n"
+        "I help you find cars (Benz, Lexus, Toyota Venza/Avalon/Camry) "
+        "from direct owners in Abuja.\n\n"
+        "Available commands:\n"
+        "/cars - Get latest car listings\n"
+        "/distress - Get only distress sales\n"
+        "/mercedes - Find Mercedes-Benz\n"
+        "/lexus - Find Lexus\n"
+        "/toyota - Find Toyota Venza/Avalon/Camry\n"
+        "/help - Show this message\n\n"
+        "Powered by Apify for reliable scraping! 🤖"
+    )
+    await update.message.reply_text(welcome_message, parse_mode='Markdown')
 
-    def calculate_distress_score(self, text):
-        """Calculate distress score based on keywords"""
-        text_lower = text.lower()
-        score = 0
-        matched = []
-        
-        for keyword, weight in ALL_DISTRESS.items():
-            if keyword in text_lower:
-                score += weight
-                matched.append(keyword)
-        
-        return score, matched
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send help message."""
+    await start(update, context)
 
-    def scrape_jiji_stealth(self):
-        """Jiji scraper with stealth + FREE PROXY ROTATION"""
-        listings = []
+async def get_cars(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Get latest car listings."""
+    await update.message.reply_text("🔍 Searching for cars in Abuja... Please wait.")
+    
+    try:
+        # Run scraper in thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        listings = await loop.run_in_executor(
+            None, 
+            scraper.get_all_listings,
+            True,  # use_apify
+            10     # max_results
+        )
         
-        try:
-            # Load free proxies first
-            if not self.load_free_proxies():
-                logger.warning("⚠️ No free proxies available, will try without proxy...")
-            
-            makes_to_search = [
-                ('mercedes-benz', 'BENZ'),
-                ('lexus', 'LEXUS'),
-                ('toyota', 'TOYOTA')
-            ]
-            
-            for make_slug, make_name in makes_to_search:
-                logger.info(f"🎯 Targeting {make_name} in Abuja...")
-                
-                # Try with different proxies (or without)
-                max_attempts = max(3, len(self.proxy_pool)) if self.proxy_pool else 1
-                
-                for attempt in range(max_attempts):
-                    proxy = self.get_next_proxy() if self.proxy_pool else None
-                    
-                    if proxy:
-                        logger.info(f"  Attempt {attempt+1}/{max_attempts} for {make_name} with proxy: {proxy}")
-                    else:
-                        logger.info(f"  Attempt {attempt+1}/{max_attempts} for {make_name} without proxy")
-                    
-                    try:
-                        # Setup browser with this proxy (or without)
-                        if not self.setup_browser_with_proxy(proxy):
-                            logger.warning("  Browser setup failed, trying next...")
-                            continue
-                        
-                        url = f"https://jiji.ng/cars/{make_slug}"
-                        logger.info(f"  Navigating to {url}")
-                        
-                        # Set page load timeout
-                        self.driver.set_page_load_timeout(30)
-                        
-                        # Navigate to page
-                        self.driver.get(url)
-                        
-                        # Random delay after load
-                        self.random_delay(4, 8)
-                        
-                        # Scroll naturally
-                        self.human_scroll()
-                        
-                        # Wait for content
-                        time.sleep(random.uniform(2, 4))
-                        
-                        # Get page source and analyze
-                        page_source = self.driver.page_source
-                        page_length = len(page_source)
-                        logger.info(f"  📊 Page length: {page_length} chars")
-                        
-                        # Check for blocking indicators
-                        page_lower = page_source.lower()
-                        if "captcha" in page_lower:
-                            logger.warning(f"  ⚠️ Captcha detected")
-                            self.driver.quit()
-                            continue
-                        elif "403" in page_lower or "forbidden" in page_lower:
-                            logger.warning(f"  ⚠️ 403 Forbidden detected")
-                            self.driver.quit()
-                            continue
-                        elif page_length < 50000:
-                            logger.warning(f"  ⚠️ Suspiciously small page ({page_length} chars)")
-                            self.driver.quit()
-                            continue
-                        
-                        # Parse with BeautifulSoup
-                        soup = BeautifulSoup(page_source, 'html5lib')
-                        
-                        # Try multiple selectors for listings
-                        cards = []
-                        selectors = [
-                            'div[class*="b-list-advert-base"]',
-                            'div[class*="qa-advert-list-item"]',
-                            'div[class*="listing-card"]',
-                            'a[href*="/cars/"][class*="advert"]',
-                            'div[data-testid="listing"]',
-                            'div.Listing__Container'
-                        ]
-                        
-                        for selector in selectors:
-                            cards = soup.select(selector)
-                            if cards:
-                                logger.info(f"  Found {len(cards)} cards using: {selector}")
-                                break
-                        
-                        if not cards:
-                            # Try fallback - look for divs with images
-                            all_divs = soup.find_all('div')
-                            cards = [div for div in all_divs if div.find('img') and len(div.text) > 100]
-                            logger.info(f"  Found {len(cards)} cards using fallback method")
-                        
-                        for card in cards[:15]:  # First 15 per make
-                            try:
-                                # Extract title
-                                title_elem = (card.find(['h3', 'h4', 'span'], 
-                                                        class_=re.compile('title|name|description')) or 
-                                             card.find('a') or 
-                                             card)
-                                title = title_elem.text.strip() if title_elem else ""
-                                
-                                if len(title) < 10:
-                                    continue
-                                
-                                # Check Abuja location
-                                card_text = card.text.lower()
-                                if not any(area in card_text for area in ABUJA_AREAS):
-                                    continue
-                                
-                                # Check if target car
-                                title_lower = title.lower()
-                                car_make = None
-                                for make, keywords in TARGET_MAKES.items():
-                                    if any(kw in title_lower for kw in keywords):
-                                        car_make = make
-                                        break
-                                
-                                if not car_make:
-                                    continue
-                                
-                                # Extract price
-                                price_elem = (card.find(['div', 'span'], 
-                                                         class_=re.compile('price|amount')) or 
-                                             card.find(['div', 'span'], string=re.compile(r'[₦N]')))
-                                price = price_elem.text.strip() if price_elem else "Contact"
-                                
-                                # Extract link
-                                link_elem = card.find('a', href=True)
-                                link = link_elem['href'] if link_elem else ""
-                                if link and not link.startswith('http'):
-                                    link = 'https://jiji.ng' + link
-                                
-                                # Extract location
-                                location = 'Abuja'
-                                for area in ABUJA_AREAS:
-                                    if area in card_text:
-                                        location = area.title()
-                                        break
-                                
-                                # Calculate distress score
-                                full_text = title + " " + card_text
-                                distress_score, matched = self.calculate_distress_score(full_text)
-                                
-                                listings.append({
-                                    'title': title,
-                                    'price': price,
-                                    'location': location,
-                                    'url': link,
-                                    'platform': 'Jiji.ng (Stealth+Proxy)',
-                                    'description': title,
-                                    'make': car_make,
-                                    'distress_score': distress_score,
-                                    'distress_keywords': matched[:3] if matched else []
-                                })
-                                
-                                logger.info(f"  ✅ Found: {title[:60]}... (Score: {distress_score})")
-                                
-                            except Exception as e:
-                                continue
-                        
-                        # Success! Break out of retry loop
-                        self.driver.quit()
-                        break
-                        
-                    except Exception as e:
-                        logger.error(f"  Attempt {attempt+1} failed: {e}")
-                        if self.driver:
-                            try:
-                                self.driver.quit()
-                            except:
-                                pass
-                        self.random_delay(3, 6)
-                
-                # Random delay between makes
-                self.random_delay(5, 10)
-            
-            logger.info(f"✅ Jiji stealth scrape complete: {len(listings)} cars found")
-            
-        except Exception as e:
-            logger.error(f"❌ Jiji stealth scrape failed: {e}")
+        formatted_message = scraper.format_listings_for_telegram(listings)
+        await update.message.reply_text(formatted_message, parse_mode='Markdown', disable_web_page_preview=False)
         
-        finally:
-            if self.driver:
-                try:
-                    self.driver.quit()
-                except:
-                    pass
-        
-        return listings
+    except Exception as e:
+        logger.error(f"Error in get_cars: {e}")
+        await update.message.reply_text("Sorry, I encountered an error. Please try again later.")
 
-    def scrape_nairaland(self):
-        """Scrape Nairaland Autos section"""
-        listings = []
-        url = "https://www.nairaland.com/autos"
+async def get_distress(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Get only distress sales."""
+    await update.message.reply_text("🔍 Searching for distress sales in Abuja... Please wait.")
+    
+    try:
+        loop = asyncio.get_event_loop()
+        all_listings = await loop.run_in_executor(
+            None, 
+            scraper.get_all_listings,
+            True,  # use_apify
+            20     # max_results
+        )
         
-        try:
-            logger.info("🌐 Scraping Nairaland...")
-            self.random_delay()
-            
-            headers = {'User-Agent': self.ua.random}
-            response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
-            soup = BeautifulSoup(response.text, 'html5lib')
-            
-            # Find all topic links
-            all_links = soup.find_all('a', href=True)
-            topic_links = [l for l in all_links if '/topic/' in l['href']]
-            
-            for link in topic_links[:30]:
-                try:
-                    title = link.text.strip()
-                    if len(title) < 10:
-                        continue
-                    
-                    # Check if in Abuja
-                    title_lower = title.lower()
-                    if not any(area in title_lower for area in ABUJA_AREAS):
-                        continue
-                    
-                    # Check if target car
-                    car_make = None
-                    for make, keywords in TARGET_MAKES.items():
-                        if any(kw in title_lower for kw in keywords):
-                            car_make = make
-                            break
-                    
-                    if not car_make:
-                        continue
-                    
-                    # Extract price
-                    price_match = re.search(r'[₦N]\s*([\d,]+)', title)
-                    price = price_match.group(0) if price_match else "Contact"
-                    
-                    # Get URL
-                    href = link['href']
-                    if href.startswith('/'):
-                        href = 'https://www.nairaland.com' + href
-                    
-                    # Calculate distress score
-                    distress_score, matched = self.calculate_distress_score(title)
-                    
-                    listings.append({
-                        'title': title,
-                        'price': price,
-                        'location': 'Abuja',
-                        'url': href,
-                        'platform': 'Nairaland',
-                        'description': title,
-                        'make': car_make,
-                        'distress_score': distress_score,
-                        'distress_keywords': matched[:3] if matched else []
-                    })
-                    
-                    logger.info(f"  ✅ Nairaland: {title[:60]}...")
-                    
-                except Exception:
-                    continue
-            
-            logger.info(f"✅ Nairaland: Found {len(listings)} cars")
-            
-        except Exception as e:
-            logger.error(f"❌ Nairaland failed: {e}")
+        # Filter for distress sales
+        distress_listings = [l for l in all_listings if l['is_distress']]
         
-        return listings
+        if not distress_listings:
+            await update.message.reply_text("No distress sales found at the moment.")
+            return
+        
+        message = "🔴 *DISTRESS SALES IN ABUJA* 🔴\n\n"
+        for i, listing in enumerate(distress_listings[:10], 1):
+            message += f"{i}. *{listing['title']}*\n"
+            message += f"💰 {listing['price']}\n"
+            message += f"📍 {listing['location']}\n"
+            message += f"[View]({listing['url']})\n\n"
+        
+        await update.message.reply_text(message, parse_mode='Markdown', disable_web_page_preview=True)
+        
+    except Exception as e:
+        logger.error(f"Error in get_distress: {e}")
+        await update.message.reply_text("Sorry, I encountered an error. Please try again later.")
 
-    def scrape_olist(self):
-        """Scrape OList.ng"""
-        listings = []
-        url = "https://olist.ng/cars/abuja"
-        
-        try:
-            logger.info("🌐 Scraping OList...")
-            self.random_delay()
-            
-            headers = {'User-Agent': self.ua.random}
-            response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
-            
-            if response.status_code != 200:
-                logger.warning("⚠️ OList not accessible")
-                return []
-            
-            soup = BeautifulSoup(response.text, 'html5lib')
-            
-            # Find listing items
-            items = soup.find_all('div', class_=re.compile('listing|item|ad|card'))
-            
-            for item in items[:20]:
-                try:
-                    title_elem = item.find('h3') or item.find('h4') or item.find('a')
-                    if not title_elem:
-                        continue
-                    title = title_elem.text.strip()
-                    
-                    # Check if target car
-                    title_lower = title.lower()
-                    car_make = None
-                    for make, keywords in TARGET_MAKES.items():
-                        if any(kw in title_lower for kw in keywords):
-                            car_make = make
-                            break
-                    
-                    if not car_make:
-                        continue
-                    
-                    # Extract price
-                    price_elem = item.find('span', class_=re.compile('price')) or item.find('div', class_=re.compile('price'))
-                    price = price_elem.text.strip() if price_elem else "Contact"
-                    
-                    # Extract link
-                    link_elem = item.find('a', href=True)
-                    link = link_elem['href'] if link_elem else ""
-                    if link and not link.startswith('http'):
-                        link = 'https://olist.ng' + link
-                    
-                    # Calculate distress score
-                    distress_score, matched = self.calculate_distress_score(title)
-                    
-                    listings.append({
-                        'title': title,
-                        'price': price,
-                        'location': 'Abuja',
-                        'url': link,
-                        'platform': 'OList.ng',
-                        'description': title,
-                        'make': car_make,
-                        'distress_score': distress_score,
-                        'distress_keywords': matched[:3] if matched else []
-                    })
-                    
-                    logger.info(f"  ✅ OList: {title[:60]}...")
-                    
-                except Exception:
-                    continue
-                    
-        except Exception as e:
-            logger.warning(f"⚠️ OList scrape failed: {e}")
-        
-        logger.info(f"✅ OList: Found {len(listings)} cars")
-        return listings
+async def get_mercedes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Get Mercedes listings."""
+    await filter_by_car_type(update, context, 'mercedes', '⭐ Mercedes-Benz')
 
-    def scrape_all(self):
-        """Run all scrapers"""
-        all_listings = []
+async def get_lexus(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Get Lexus listings."""
+    await filter_by_car_type(update, context, 'lexus', '✨ Lexus')
+
+async def get_toyota(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Get Toyota listings."""
+    await filter_by_car_type(update, context, 'toyota', '🌟 Toyota')
+
+async def filter_by_car_type(update: Update, context: ContextTypes.DEFAULT_TYPE, car_type, display_name):
+    """Filter listings by car type."""
+    await update.message.reply_text(f"🔍 Searching for {display_name} in Abuja... Please wait.")
+    
+    try:
+        loop = asyncio.get_event_loop()
+        all_listings = await loop.run_in_executor(
+            None, 
+            scraper.get_all_listings,
+            True,  # use_apify
+            20     # max_results
+        )
         
-        # 1. Jiji with stealth + proxies (primary)
-        try:
-            jiji_results = self.scrape_jiji_stealth()
-            all_listings.extend(jiji_results)
-        except Exception as e:
-            logger.error(f"Jiji stealth failed: {e}")
+        # Filter for specific car type
+        filtered = [l for l in all_listings if l['car_type'] == car_type]
         
-        # 2. Nairaland (backup)
-        try:
-            nairaland_results = self.scrape_nairaland()
-            all_listings.extend(nairaland_results)
-        except Exception as e:
-            logger.error(f"Nairaland failed: {e}")
+        if not filtered:
+            await update.message.reply_text(f"No {display_name} listings found at the moment.")
+            return
         
-        # 3. OList (if available)
-        try:
-            olist_results = self.scrape_olist()
-            all_listings.extend(olist_results)
-        except Exception as e:
-            logger.warning(f"OList failed: {e}")
+        message = f"{display_name} *IN ABUJA*\n\n"
+        for i, listing in enumerate(filtered[:10], 1):
+            distress = "🔴 " if listing['is_distress'] else ""
+            message += f"{distress}{i}. *{listing['title']}*\n"
+            message += f"💰 {listing['price']}\n"
+            message += f"📍 {listing['location']}\n"
+            message += f"[View]({listing['url']})\n\n"
         
-        # Remove duplicates
-        unique = []
-        seen_urls = set()
-        for listing in all_listings:
-            if listing['url'] and listing['url'] not in seen_urls:
-                seen_urls.add(listing['url'])
-                unique.append(listing)
+        await update.message.reply_text(message, parse_mode='Markdown', disable_web_page_preview=True)
         
-        logger.info(f"📊 TOTAL: {len(unique)} unique listings found")
-        return unique
+    except Exception as e:
+        logger.error(f"Error filtering by car type: {e}")
+        await update.message.reply_text("Sorry, I encountered an error. Please try again later.")
+
+# Add handlers
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(CommandHandler("help", help_command))
+telegram_app.add_handler(CommandHandler("cars", get_cars))
+telegram_app.add_handler(CommandHandler("distress", get_distress))
+telegram_app.add_handler(CommandHandler("mercedes", get_mercedes))
+telegram_app.add_handler(CommandHandler("lexus", get_lexus))
+telegram_app.add_handler(CommandHandler("toyota", get_toyota))
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """Telegram webhook endpoint."""
+    try:
+        update = Update.de_json(request.get_json(force=True), bot)
+        asyncio.run(telegram_app.process_update(update))
+        return jsonify({"status": "ok"}), 200
+    except Exception as e:
+        logger.error(f"Error processing webhook: {e}")
+        return jsonify({"status": "error"}), 500
+
+@app.route('/health', methods=['GET'])
+def health():
+    """Health check endpoint."""
+    return jsonify({
+        "status": "healthy",
+        "apify_configured": bool(APIFY_TOKEN)
+    }), 200
+
+@app.route('/test-scraper', methods=['GET'])
+def test_scraper():
+    """Test endpoint for scraper (protected in production)."""
+    try:
+        listings = scraper.get_all_listings(use_apify=True, max_results=3)
+        return jsonify({
+            "success": True,
+            "count": len(listings),
+            "listings": listings
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+if __name__ == '__main__':
+    # Set up webhook
+    if WEBHOOK_URL:
+        webhook_url = f"{WEBHOOK_URL}/webhook"
+        asyncio.run(bot.set_webhook(url=webhook_url))
+        logger.info(f"Webhook set to {webhook_url}")
+    
+    # Run Flask app
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)

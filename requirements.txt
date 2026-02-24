@@ -7,5 +7,5 @@ html5lib==1.1
 gunicorn==21.2.0
 selenium==4.15.0
 undetected-chromedriver==3.5.4
-selenium-wire==5.1.1
+selenium-wire-webdrivermanager==5.1.2
 webdriver-manager==4.0.1

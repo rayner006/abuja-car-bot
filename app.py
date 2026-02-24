@@ -7,8 +7,9 @@ import logging
 import requests
 from datetime import datetime
 
-# Import config
+# Import config and scraper
 from config import *
+from scraper import NigerianCarScraper
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -20,6 +21,11 @@ app = Flask(__name__)
 # Track scan status
 last_scan_time = None
 last_results = []
+scan_count = 0
+cars_found_today = 0
+
+# Initialize scraper
+scraper = NigerianCarScraper()
 
 def send_telegram_message(message):
     """Send message to your Telegram"""
@@ -38,13 +44,12 @@ def send_telegram_message(message):
     try:
         response = requests.post(url, json=payload, timeout=10)
         if response.status_code == 200:
-            logger.info("✅ Telegram message sent")
             return True
         else:
-            logger.error(f"❌ Telegram error: {response.text}")
+            logger.error(f"Telegram error: {response.text}")
             return False
     except Exception as e:
-        logger.error(f"❌ Failed to send Telegram: {e}")
+        logger.error(f"Failed to send Telegram: {e}")
         return False
 
 def calculate_distress_score(text):
@@ -53,73 +58,12 @@ def calculate_distress_score(text):
     score = 0
     matched = []
     
-    for keyword, weight in DISTRESS_KEYWORDS.items():
+    for keyword, weight in ALL_DISTRESS.items():
         if keyword in text_lower:
             score += weight
             matched.append(keyword)
     
     return score, matched
-
-def is_in_abuja(text):
-    """Check if listing is in Abuja"""
-    text_lower = text.lower()
-    for area in ABUJA_AREAS:
-        if area in text_lower:
-            return True
-    return False
-
-def identify_make(title):
-    """Identify if car is Benz, Lexus, or Toyota target"""
-    title_lower = title.lower()
-    
-    for make, keywords in TARGET_MAKES.items():
-        for keyword in keywords:
-            if keyword in title_lower:
-                return make
-    return None
-
-def send_test_message():
-    """Send test message to confirm Telegram works"""
-    message = (
-        "🤖 <b>ABUJA CAR BOT IS ALIVE!</b>\n\n"
-        f"✅ Bot started successfully\n"
-        f"📊 Scanning every {SCAN_INTERVAL_MINUTES} minutes\n"
-        f"📍 Target: Abuja\n"
-        f"🚗 Cars: Benz, Lexus, Toyota (Venza/Avalon/Camry)\n"
-        f"💰 Distress keywords active\n\n"
-        f"⏰ <i>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
-    )
-    return send_telegram_message(message)
-
-def scrape_simulation():
-    """Simulated scraping - will be replaced with real scraper"""
-    test_listings = [
-        {
-            'title': 'URGENT: Mercedes Benz C300 2018 Abuja',
-            'price': '₦14,500,000',
-            'location': 'Wuse 2, Abuja',
-            'url': 'https://jiji.ng/test1',
-            'platform': 'Jiji.ng',
-            'description': 'Distress sale! Relocating abroad, need cash urgently'
-        },
-        {
-            'title': 'Lexus RX350 2016 for quick sale',
-            'price': '₦8,200,000',
-            'location': 'Maitama, Abuja',
-            'url': 'https://nairaland.com/test2',
-            'platform': 'Nairaland',
-            'description': 'Price crash! Below market value'
-        },
-        {
-            'title': 'Toyota Camry 2019 - Urgent Sale',
-            'price': '₦4,500,000',
-            'location': 'Gwarinpa, Abuja',
-            'url': 'https://olist.ng/test3',
-            'platform': 'OList.ng',
-            'description': 'Need cash urgently, price negotiable'
-        }
-    ]
-    return test_listings
 
 def format_car_alert(listing, distress_score, matched_keywords):
     """Format car listing for Telegram"""
@@ -134,47 +78,65 @@ def format_car_alert(listing, distress_score, matched_keywords):
     else:
         emoji = "🚗 NEW LISTING"
     
+    # Format make icon
+    make_icon = {
+        'BENZ': '⭐',
+        'LEXUS': '👑',
+        'TOYOTA': '🚙'
+    }.get(listing.get('make', ''), '🚗')
+    
     # Format keywords found
-    keywords_text = ", ".join(matched_keywords[:3]) if matched_keywords else "None"
+    keywords_text = ", ".join(matched_keywords[:3]) if matched_keywords else ""
     
     message = (
-        f"{emoji}\n"
+        f"{emoji} {make_icon}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📍 <b>{listing.get('location', 'Abuja')}</b>\n"
-        f"🚗 <b>{listing.get('title', 'N/A')}</b>\n"
-        f"💰 {listing.get('price', 'Contact for price')}\n"
+        f"🚗 {listing.get('title', 'N/A')}\n"
+        f"💰 {listing.get('price', 'Contact')}\n"
     )
     
-    if matched_keywords:
-        message += f"⚠️ Distress: {keywords_text}\n"
+    if keywords_text:
+        message += f"⚠️ <i>{keywords_text}</i>\n"
     
     message += (
-        f"🌐 {listing.get('platform', 'Unknown')}\n"
+        f"📧 {listing.get('platform', 'Unknown')}\n"
         f"🔗 {listing.get('url', '#')}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"⏱️ Found: {datetime.now().strftime('%H:%M:%S')}"
+        f"Found: {datetime.now().strftime('%H:%M:%S')}"
     )
     
     return message
 
 def background_scraper():
-    """Main scraping loop"""
-    global last_scan_time, last_results
+    """Main scraping loop with REAL data"""
+    global last_scan_time, last_results, scan_count, cars_found_today
     
     # Wait a bit for Flask to start
     time.sleep(5)
     
     # Send startup message
-    send_test_message()
-    logger.info("🤖 Bot started - test message sent to Telegram")
+    startup_msg = (
+        "🤖 <b>ABUJA CAR BOT STARTED!</b>\n\n"
+        f"✅ Real scraping ACTIVE\n"
+        f"📊 Scanning every {SCAN_INTERVAL_MINUTES} minutes\n"
+        f"📍 Target: Abuja\n"
+        f"🚗 Cars: Benz, Lexus, Toyota\n"
+        f"🌐 Platforms: Jiji, Nairaland, OList\n"
+        f"💰 Distress detection: ACTIVE\n\n"
+        f"⏰ <i>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
+    )
+    send_telegram_message(startup_msg)
+    logger.info("🤖 Bot started with REAL scraper!")
     
     while True:
         try:
-            logger.info("🔍 Starting scan cycle...")
+            logger.info("🔍 Starting REAL scan cycle...")
             scan_start = datetime.now()
+            scan_count += 1
             
-            # SIMULATION MODE - Will replace with real scraping
-            listings = scrape_simulation()
+            # Get REAL listings from scraper
+            listings = scraper.scrape_all()
             
             new_found = 0
             for listing in listings:
@@ -182,29 +144,28 @@ def background_scraper():
                 full_text = listing['title'] + " " + listing.get('description', '')
                 distress_score, matched = calculate_distress_score(full_text)
                 
-                # Check location and make
-                if is_in_abuja(full_text) or is_in_abuja(listing['location']):
-                    make = identify_make(listing['title'])
-                    if make:
-                        # Send to Telegram
-                        alert = format_car_alert(listing, distress_score, matched)
-                        send_telegram_message(alert)
-                        new_found += 1
-                        time.sleep(2)  # Small delay between messages
+                # Send to Telegram (with delay between messages)
+                alert = format_car_alert(listing, distress_score, matched)
+                send_telegram_message(alert)
+                new_found += 1
+                cars_found_today += 1
+                time.sleep(2)  # Small delay between messages
             
             # Send summary
             scan_time = (datetime.now() - scan_start).total_seconds()
             summary = (
-                f"📊 <b>Scan Complete</b>\n"
+                f"📊 <b>Scan #{scan_count} Complete</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"✅ Found: {new_found} new listings\n"
+                f"📈 Today total: {cars_found_today}\n"
                 f"⏱️ Scan took: {scan_time:.1f} seconds\n"
                 f"🔄 Next scan: in {SCAN_INTERVAL_MINUTES} minutes"
             )
             send_telegram_message(summary)
             
             last_scan_time = datetime.now()
-            logger.info(f"✅ Scan complete. Found {new_found} new cars")
+            last_results = listings
+            logger.info(f"✅ Scan complete. Found {new_found} cars")
             
             # Wait for next scan (with random offset)
             next_run = (SCAN_INTERVAL_MINUTES * 60) + random.randint(0, 120)
@@ -214,7 +175,7 @@ def background_scraper():
             
         except Exception as e:
             logger.error(f"❌ Error in scraper: {e}")
-            send_telegram_message(f"⚠️ Bot error: {str(e)[:100]}")
+            send_telegram_message(f"⚠️ Bot error: {str(e)[:200]}")
             time.sleep(300)  # Wait 5 min on error
 
 @app.route('/')
@@ -222,7 +183,10 @@ def home():
     return jsonify({
         'status': 'alive',
         'service': 'Abuja Car Scraper Bot',
+        'mode': 'REAL SCRAPING',
         'telegram': 'Connected' if TELEGRAM_BOT_TOKEN else 'No token',
+        'scan_count': scan_count,
+        'cars_found_today': cars_found_today,
         'last_scan': last_scan_time.isoformat() if last_scan_time else 'Never',
         'next_scan': f'Every {SCAN_INTERVAL_MINUTES} minutes'
     })
@@ -234,17 +198,31 @@ def health():
 @app.route('/test')
 def test_telegram():
     """Test endpoint to send a message"""
-    result = send_test_message()
+    test_msg = (
+        "🧪 <b>TEST MESSAGE</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "✅ Bot is working!\n"
+        f"📊 Scan count: {scan_count}\n"
+        f"🚗 Cars found: {cars_found_today}\n"
+        f"⏰ {datetime.now().strftime('%H:%M:%S')}"
+    )
+    result = send_telegram_message(test_msg)
     if result:
         return jsonify({'status': 'Test message sent to Telegram'})
     else:
         return jsonify({'error': 'Failed to send'}), 500
 
+@app.route('/scan')
+def force_scan():
+    """Force an immediate scan"""
+    thread = threading.Thread(target=lambda: background_scraper())
+    thread.start()
+    return jsonify({'status': 'Scan started in background'})
+
 if __name__ == '__main__':
     # Check Telegram credentials
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        logger.warning("⚠️ TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set!")
-        logger.warning("Add them in Render Environment Variables")
+        logger.warning("⚠️ Telegram credentials not set!")
     else:
         logger.info("✅ Telegram credentials found")
     

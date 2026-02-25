@@ -2,7 +2,6 @@
 """
 Abuja Car Bot - Sends 8 Abuja cars every 30 min from your Apify dataset
 With complete Abuja locations and working links!
-NOW WITH WEB SERVER FOR RENDER FREE TIER
 """
 
 import os
@@ -13,43 +12,6 @@ import schedule
 from datetime import datetime
 from typing import List, Dict, Any, Tuple
 from pathlib import Path
-import threading
-from flask import Flask
-
-# ============================================
-# FLASK WEB SERVER FOR RENDER KEEP-ALIVE
-# ============================================
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return """
-    <html>
-        <head><title>Abuja Car Bot</title></head>
-        <body style="font-family: Arial; text-align: center; padding: 50px;">
-            <h1>🚗 Abuja Car Bot is Running!</h1>
-            <p>Sending 8 Abuja cars every 30 minutes</p>
-            <p>✅ Bot active since: {}</p>
-            <p><small>Last check: Every 30 minutes</small></p>
-        </body>
-    </html>
-    """.format(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-
-@app.route('/ping')
-def ping():
-    """Simple ping endpoint for keep-alive services"""
-    return "pong", 200
-
-@app.route('/status')
-def status():
-    """Show bot status"""
-    sent_cars = load_sent_cars()
-    return {
-        'status': 'running',
-        'cars_sent': len(sent_cars),
-        'last_check': 'Every 30 minutes',
-        'dataset_id': APIFY_DATASET_ID[:8] + '...' if APIFY_DATASET_ID else 'Not set'
-    }
 
 # ============================================
 # CONFIGURATION - Get from environment variables
@@ -74,14 +36,14 @@ missing = []
 if not APIFY_TOKEN: missing.append("APIFY_TOKEN")
 if not TELEGRAM_BOT_TOKEN: missing.append("TELEGRAM_BOT_TOKEN")
 if not TELEGRAM_CHAT_ID: missing.append("TELEGRAM_CHAT_ID")
-if not APIFY_DATASET_ID: missing.append("DATASET_ID")
+if not APIFY_DATASET_ID: missing.append("DATASET_ID (set as APIFY_DATASET_ID in code)")
 
 if missing:
     print("❌ Missing required environment variables:", ", ".join(missing))
     print("Please set these in your Render dashboard.")
-    # Don't exit - let Flask server still run to show error
-else:
-    print(f"✅ Using Dataset ID: {APIFY_DATASET_ID}")
+    exit(1)
+
+print(f"✅ Using Dataset ID: {APIFY_DATASET_ID}")
 
 # ============================================
 # MEMORY FUNCTIONS - Track sent cars
@@ -590,12 +552,16 @@ def send_startup_message():
     )
     send_telegram_message(message)
 
-# ============================================
-# MAIN BOT LOOP - EXACTLY AS IT WORKED BEFORE
-# ============================================
 def run_continuous():
-    """This is the EXACT same function that worked in your old script"""
-    print("🤖 Bot scheduler started")
+    """Run continuously - NO PROMPTS, AUTO-START"""
+    print("""
+    ╔════════════════════════════════╗
+    ║    ABUJA CAR BOT - FINAL VERSION ║
+    ║    AUTO-START - NO PROMPTS     ║
+    ║    Sending 8 Abuja cars every 30 min║
+    ╚════════════════════════════════╝
+    """)
+    print(f"📡 Dataset ID: {APIFY_DATASET_ID}")
     
     try:
         send_startup_message()
@@ -620,32 +586,10 @@ def run_continuous():
             send_telegram_message("🛑 Bot stopped")
         except:
             pass
-    except Exception as e:
-        print(f"❌ Bot scheduler error: {e}")
 
 # ============================================
-# ENTRY POINT - RUN BOTH FLASK AND BOT
+# ENTRY POINT - AUTO-START
 # ============================================
 
 if __name__ == "__main__":
-    print("""
-    ╔════════════════════════════════╗
-    ║    ABUJA CAR BOT - WEB SERVER  ║
-    ║    RENDER FREE TIER VERSION    ║
-    ║    Sending 8 Abuja cars every 30 min║
-    ╚════════════════════════════════╝
-    """)
-    
-    # Start the bot using the EXACT same function that worked before
-    bot_thread = threading.Thread(target=run_continuous, daemon=True)
-    bot_thread.start()
-    print(f"✅ Bot started in background thread (using working function)")
-    
-    # Get port from Render environment or use default
-    port = int(os.environ.get('PORT', 10000))
-    print(f"🌐 Starting web server on port {port}")
-    print(f"📡 Keep-alive URL: https://your-app.onrender.com/ping")
-    print("🔄 Bot will stay alive with cron-job.org pings")
-    
-    # Run Flask app (this blocks, but bot runs in thread)
-    app.run(host='0.0.0.0', port=port)
+    run_continuous()

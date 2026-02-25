@@ -14,6 +14,56 @@ from typing import List, Dict, Any, Tuple
 from pathlib import Path
 
 # ============================================
+# FLASK WEB SERVER FOR RENDER (ADDED FOR PORT)
+# ============================================
+try:
+    from flask import Flask, jsonify
+    import threading
+    
+    # Create Flask app
+    web_app = Flask(__name__)
+    
+    @web_app.route('/')
+    def home():
+        return "🤖 Abuja Car Bot is running! Check Telegram for updates.", 200
+    
+    @web_app.route('/health')
+    def health():
+        return "OK", 200
+    
+    @web_app.route('/status')
+    def status():
+        """Show bot status - useful for debugging"""
+        try:
+            sent_cars = load_sent_cars() if 'load_sent_cars' in dir() else set()
+            return jsonify({
+                'status': 'running',
+                'cars_sent': len(sent_cars) if sent_cars else 0,
+                'dataset_id': os.environ.get('DATASET_ID', 'Not set')[:8] + '...' if os.environ.get('DATASET_ID') else 'Not set',
+                'time': datetime.now().isoformat()
+            }), 200
+        except Exception as e:
+            return jsonify({'status': 'error', 'message': str(e)}), 500
+    
+    def run_flask():
+        """Run Flask in a separate thread"""
+        port = int(os.environ.get('PORT', 10000))
+        print(f"🌐 Starting Flask web server on port {port}")
+        web_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+    
+    # Start Flask in a background thread
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    print("✅ Flask web server started in background thread")
+    print("🌐 Web routes: / (home), /health, /status")
+    
+except ImportError:
+    print("⚠️ Flask not installed - web server disabled")
+    print("   To enable, add 'flask' to requirements.txt")
+except Exception as e:
+    print(f"⚠️ Could not start Flask: {e}")
+
+# ============================================
 # CONFIGURATION - Get from environment variables
 # ============================================
 APIFY_TOKEN = os.environ.get('APIFY_TOKEN')

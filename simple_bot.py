@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
 Abuja Car Bot - Sends 8 cars every 30 min from your Apify dataset
-Manually scrape Apify when dataset empty - bot tells you when!
-AUTO-START - Runs forever once deployed
+Dataset ID now comes from environment variable - no code changes needed!
 """
 
 import os
@@ -15,20 +14,36 @@ from typing import List, Dict, Any, Tuple
 from pathlib import Path
 
 # ============================================
-# CONFIGURATION - Get from environment variables
+# CONFIGURATION - ALL from environment variables
 # ============================================
 APIFY_TOKEN = os.environ.get('APIFY_TOKEN')
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
+# NEW: Dataset ID now comes from environment variable!
+APIFY_DATASET_ID = os.environ.get('APIFY_DATASET_ID')
+
 # How many cars to send per update
 MAX_CARS_PER_MESSAGE = 8
 
-# YOUR DATASET ID FROM APIFY CONSOLE
-YOUR_DATASET_ID = "LbGDKcIwiRQilOepM"  # <-- 180 cars waiting here!
-
 # File to remember which cars we've already sent
 SENT_CARS_FILE = "sent_cars.json"
+
+# ============================================
+# VERIFY ALL ENVIRONMENT VARIABLES
+# ============================================
+missing = []
+if not APIFY_TOKEN: missing.append("APIFY_TOKEN")
+if not TELEGRAM_BOT_TOKEN: missing.append("TELEGRAM_BOT_TOKEN")
+if not TELEGRAM_CHAT_ID: missing.append("TELEGRAM_CHAT_ID")
+if not APIFY_DATASET_ID: missing.append("APIFY_DATASET_ID")  # NEW check!
+
+if missing:
+    print("❌ Missing required environment variables:", ", ".join(missing))
+    print("Please set these in your Render dashboard.")
+    exit(1)
+
+print(f"✅ Using Dataset ID: {APIFY_DATASET_ID}")
 
 # ============================================
 # MEMORY FUNCTIONS - Track sent cars
@@ -181,12 +196,12 @@ def get_badges(analysis: Dict[str, Any]) -> str:
     return " | ".join(badges) if badges else "📋 REGULAR"
 
 # ============================================
-# APIFY FUNCTIONS - GET CARS FROM YOUR DATASET
+# APIFY FUNCTIONS - USING ENV VARIABLE
 # ============================================
 
 def fetch_all_cars_from_dataset() -> List[Dict[str, Any]]:
     """Fetch ALL cars from your Apify dataset"""
-    url = f"https://api.apify.com/v2/datasets/{YOUR_DATASET_ID}/items"
+    url = f"https://api.apify.com/v2/datasets/{APIFY_DATASET_ID}/items"
     params = {
         "token": APIFY_TOKEN,
         "format": "json"
@@ -196,7 +211,7 @@ def fetch_all_cars_from_dataset() -> List[Dict[str, Any]]:
         response = requests.get(url, params=params)
         response.raise_for_status()
         cars = response.json()
-        print(f"✅ Fetched {len(cars)} total cars from your dataset")
+        print(f"✅ Fetched {len(cars)} total cars from dataset: {APIFY_DATASET_ID}")
         return cars
     except Exception as e:
         print(f"❌ Error fetching cars: {e}")
@@ -206,16 +221,12 @@ def get_unsent_cars(all_cars: List[Dict[str, Any]], sent_cars: set) -> List[Dict
     """Return only cars that haven't been sent yet"""
     unsent = []
     for car in all_cars:
-        # Use URL as unique identifier
         car_url = car.get('url', '')
         if car_url and car_url not in sent_cars:
-            # Add analysis to car for sorting
             car['analysis'] = analyze_listing(car)
             unsent.append(car)
     
-    # Sort by deal score (best deals first)
     unsent.sort(key=lambda x: x['analysis']['deal_score'], reverse=True)
-    
     print(f"📊 Unsent cars: {len(unsent)} out of {len(all_cars)} total")
     return unsent
 
@@ -273,7 +284,6 @@ def format_car_message(cars: List[Dict[str, Any]], title: str = "Abuja Cars Upda
         
         message += "─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─\n\n"
     
-    # Add progress info
     if cars_left > 0:
         message += f"📊 *Sent {len(cars)} cars | {cars_left} remaining in dataset*"
     else:
@@ -291,61 +301,52 @@ def send_car_update():
     print(f"🔍 Checking at {datetime.now()}")
     print(f"{'='*50}")
     
-    # 1. Load which cars we've already sent
     sent_cars = load_sent_cars()
     print(f"📝 Already sent {len(sent_cars)} cars")
     
-    # 2. Fetch ALL cars from your dataset
     all_cars = fetch_all_cars_from_dataset()
     
     if not all_cars:
         send_telegram_message("❌ Could not fetch cars from Apify. Check token or dataset ID.")
         return
     
-    # 3. Get cars we haven't sent yet
     unsent_cars = get_unsent_cars(all_cars, sent_cars)
     
-    # 4. Check if we have any cars left
     if not unsent_cars:
         message = (
             "⚠️ *DATASET COMPLETE* ⚠️\n\n"
-            "✅ All 180 cars have been sent to Telegram!\n\n"
+            f"✅ All {len(all_cars)} items have been sent to Telegram!\n\n"
             "🔄 *Next step:*\n"
             "1. Go to Apify Console\n"
-            "2. Run the Jiji scraper again\n"
+            "2. Run a new scrape\n"
             "3. Get new dataset ID\n"
-            "4. Update YOUR_DATASET_ID in bot\n\n"
+            "4. Update APIFY_DATASET_ID in Render environment variables\n\n"
             "Bot will pause until new dataset is added."
         )
         send_telegram_message(message)
-        print("🏁 All cars sent! Waiting for new dataset...")
+        print("🏁 All items sent! Waiting for new dataset...")
         return
     
-    # 5. Take next 8 cars
-    next_cars = unsent_cars[:MAX_CARS_PER_MESSAGE]
+    next_items = unsent_cars[:MAX_CARS_PER_MESSAGE]
     
-    # 6. Mark these as sent
-    for car in next_cars:
-        car_url = car.get('url', '')
-        if car_url:
-            sent_cars.add(car_url)
+    for item in next_items:
+        item_url = item.get('url', '')
+        if item_url:
+            sent_cars.add(item_url)
     
-    # 7. Save updated sent list
     save_sent_cars(sent_cars)
     
-    # 8. Calculate remaining cars
-    cars_remaining = len(unsent_cars) - len(next_cars)
+    items_remaining = len(unsent_cars) - len(next_items)
     
-    # 9. Format and send message
-    if cars_remaining > 0:
-        title = f"Next 8 Cars ({cars_remaining} remaining)"
+    if items_remaining > 0:
+        title = f"Next {len(next_items)} Items ({items_remaining} remaining)"
     else:
-        title = "Final 8 Cars in Dataset"
+        title = f"Final {len(next_items)} Items in Dataset"
     
-    message = format_car_message(next_cars, title, cars_remaining, len(all_cars))
+    message = format_car_message(next_items, title, items_remaining, len(all_cars))
     send_telegram_message(message)
     
-    print(f"✅ Sent {len(next_cars)} cars. {cars_remaining} left in dataset")
+    print(f"✅ Sent {len(next_items)} items. {items_remaining} left in dataset")
 
 def send_startup_message():
     """Send message when bot starts"""
@@ -354,19 +355,12 @@ def send_startup_message():
     
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     
-    if sent_count == 0:
-        status = "🆕 Fresh start - No cars sent yet"
-    elif sent_count < 180:
-        status = f"📊 Progress: {sent_count}/180 cars sent"
-    else:
-        status = "✅ All 180 cars sent - Ready for new dataset"
-    
     message = (
-        "🤖 *Abuja Car Bot Restarted*\n\n"
+        "🤖 *Bot Restarted*\n\n"
         f"🕐 {now}\n"
-        f"{status}\n"
-        "📡 Using YOUR dataset: LbGDKcIwiRQilOepM\n"
-        "⏰ Sending 8 cars every 30 minutes\n\n"
+        f"📡 Using Dataset: `{APIFY_DATASET_ID[:8]}...`\n"
+        f"📊 Progress: {sent_count} items sent so far\n"
+        "⏰ Sending 8 items every 30 minutes\n\n"
         "_Updates starting soon..._"
     )
     send_telegram_message(message)
@@ -375,26 +369,21 @@ def run_continuous():
     """Run continuously - NO PROMPTS, AUTO-START"""
     print("""
     ╔════════════════════════════════╗
-    ║    ABUJA CAR BOT - DEAL FINDER ║
+    ║      APIFY TO TELEGRAM BOT     ║
     ║    AUTO-START - NO PROMPTS     ║
-    ║    Sending 8 cars every 30 min ║
-    ║    Dataset: 180 cars total     ║
+    ║    Sending 8 items every 30 min║
     ╚════════════════════════════════╝
     """)
+    print(f"📡 Dataset ID: {APIFY_DATASET_ID}")
     
-    # Send startup message
     try:
         send_startup_message()
     except Exception as e:
         print(f"⚠️ Could not send startup message: {e}")
     
-    # Run immediately
     send_car_update()
-    
-    # Schedule regular checks
     schedule.every(30).minutes.do(send_car_update)
     
-    # Keep running forever
     print("📡 Bot is running. Press Ctrl+C to stop.")
     try:
         while True:
@@ -412,15 +401,4 @@ def run_continuous():
 # ============================================
 
 if __name__ == "__main__":
-    # Verify environment variables
-    missing = []
-    if not APIFY_TOKEN: missing.append("APIFY_TOKEN")
-    if not TELEGRAM_BOT_TOKEN: missing.append("TELEGRAM_BOT_TOKEN")
-    if not TELEGRAM_CHAT_ID: missing.append("TELEGRAM_CHAT_ID")
-    
-    if missing:
-        print("❌ Missing:", ", ".join(missing))
-        exit(1)
-    
-    # AUTO-START - NO PROMPTS!
     run_continuous()

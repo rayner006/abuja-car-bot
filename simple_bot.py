@@ -74,14 +74,14 @@ missing = []
 if not APIFY_TOKEN: missing.append("APIFY_TOKEN")
 if not TELEGRAM_BOT_TOKEN: missing.append("TELEGRAM_BOT_TOKEN")
 if not TELEGRAM_CHAT_ID: missing.append("TELEGRAM_CHAT_ID")
-if not APIFY_DATASET_ID: missing.append("DATASET_ID (set as APIFY_DATASET_ID in code)")
+if not APIFY_DATASET_ID: missing.append("DATASET_ID")
 
 if missing:
     print("❌ Missing required environment variables:", ", ".join(missing))
     print("Please set these in your Render dashboard.")
     # Don't exit - let Flask server still run to show error
-
-print(f"✅ Using Dataset ID: {APIFY_DATASET_ID}")
+else:
+    print(f"✅ Using Dataset ID: {APIFY_DATASET_ID}")
 
 # ============================================
 # MEMORY FUNCTIONS - Track sent cars
@@ -590,9 +590,12 @@ def send_startup_message():
     )
     send_telegram_message(message)
 
-def run_bot_continuously():
-    """Run the bot scheduling in a separate thread"""
-    print("🤖 Bot scheduler thread started")
+# ============================================
+# MAIN BOT LOOP - EXACTLY AS IT WORKED BEFORE
+# ============================================
+def run_continuous():
+    """This is the EXACT same function that worked in your old script"""
+    print("🤖 Bot scheduler started")
     
     try:
         send_startup_message()
@@ -606,11 +609,17 @@ def run_bot_continuously():
     schedule.every(30).minutes.do(send_car_update)
     
     # Keep running forever
-    print("📡 Bot scheduler is running.")
+    print("📡 Bot is running. Press Ctrl+C to stop.")
     try:
         while True:
             schedule.run_pending()
             time.sleep(60)
+    except KeyboardInterrupt:
+        print("\n👋 Bot stopped by user")
+        try:
+            send_telegram_message("🛑 Bot stopped")
+        except:
+            pass
     except Exception as e:
         print(f"❌ Bot scheduler error: {e}")
 
@@ -627,10 +636,10 @@ if __name__ == "__main__":
     ╚════════════════════════════════╝
     """)
     
-    # Start the bot scheduler in a background thread
-    bot_thread = threading.Thread(target=run_bot_continuously, daemon=True)
+    # Start the bot using the EXACT same function that worked before
+    bot_thread = threading.Thread(target=run_continuous, daemon=True)
     bot_thread.start()
-    print("✅ Bot scheduler started in background thread")
+    print(f"✅ Bot started in background thread (using working function)")
     
     # Get port from Render environment or use default
     port = int(os.environ.get('PORT', 10000))

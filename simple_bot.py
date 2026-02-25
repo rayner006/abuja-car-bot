@@ -14,11 +14,13 @@ from typing import List, Dict, Any, Tuple
 from pathlib import Path
 
 # ============================================
-# FLASK WEB SERVER FOR RENDER (ADDED FOR PORT)
+# FLASK WEB SERVER FOR RENDER (IMPROVED VERSION)
 # ============================================
 try:
     from flask import Flask, jsonify
     import threading
+    import socket
+    import time as time_module
     
     # Create Flask app
     web_app = Flask(__name__)
@@ -35,27 +37,73 @@ try:
     def status():
         """Show bot status - useful for debugging"""
         try:
-            sent_cars = load_sent_cars() if 'load_sent_cars' in dir() else set()
+            # Try to load sent cars (function might not be defined yet when this runs)
+            sent_count = 0
+            try:
+                if 'load_sent_cars' in dir():
+                    sent_cars = load_sent_cars()
+                    sent_count = len(sent_cars)
+            except:
+                pass
+                
             return jsonify({
                 'status': 'running',
-                'cars_sent': len(sent_cars) if sent_cars else 0,
+                'cars_sent': sent_count,
                 'dataset_id': os.environ.get('DATASET_ID', 'Not set')[:8] + '...' if os.environ.get('DATASET_ID') else 'Not set',
                 'time': datetime.now().isoformat()
             }), 200
         except Exception as e:
             return jsonify({'status': 'error', 'message': str(e)}), 500
     
+    def is_port_open(port):
+        """Check if port is already open"""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(('0.0.0.0', port))
+                return False  # Port is free
+            except:
+                return True   # Port is in use
+    
     def run_flask():
-        """Run Flask in a separate thread"""
+        """Run Flask in a separate thread with better error handling"""
         port = int(os.environ.get('PORT', 10000))
-        print(f"🌐 Starting Flask web server on port {port}")
-        web_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+        
+        # Wait a moment for other services to initialize
+        time_module.sleep(2)
+        
+        print(f"🌐 Attempting to start Flask web server on port {port}")
+        
+        # Check if port is already open
+        if is_port_open(port):
+            print(f"⚠️ Port {port} is already in use. Flask might already be running.")
+            return
+        
+        try:
+            # Bind to 0.0.0.0 to accept all connections
+            web_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+        except Exception as e:
+            print(f"❌ Failed to start Flask: {e}")
+            # Try alternative port if main port fails
+            try:
+                alt_port = port + 1
+                print(f"🔄 Trying alternative port {alt_port}")
+                web_app.run(host='0.0.0.0', port=alt_port, debug=False, use_reloader=False)
+            except Exception as e2:
+                print(f"❌ Alternative port also failed: {e2}")
     
     # Start Flask in a background thread
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
-    print("✅ Flask web server started in background thread")
-    print("🌐 Web routes: / (home), /health, /status")
+    
+    # Give Flask a moment to start
+    time_module.sleep(3)
+    
+    # Verify port is open
+    if is_port_open(int(os.environ.get('PORT', 10000))):
+        print("✅ Flask web server confirmed running")
+        print("🌐 Web routes: / (home), /health, /status")
+    else:
+        print("⚠️ Flask may not be running properly. Check logs above.")
     
 except ImportError:
     print("⚠️ Flask not installed - web server disabled")

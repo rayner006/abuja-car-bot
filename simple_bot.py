@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """
-Abuja Car Bot - Automatically sends Jiji.ng car deals to Telegram every 30 minutes
-Finds direct sellers, used cars, cheap prices, and distress sales
-AUTO-CONTINUOUS MODE - No prompts, runs forever
+Abuja Car Bot - Sends 8 cars every 30 min from your Apify dataset
+Manually scrape Apify when dataset empty - bot tells you when!
+AUTO-START - Runs forever once deployed
 """
 
 import os
 import time
+import json
 import requests
 import schedule
 from datetime import datetime
 from typing import List, Dict, Any, Tuple
+from pathlib import Path
 
 # ============================================
 # CONFIGURATION - Get from environment variables
@@ -21,6 +23,37 @@ TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
 # How many cars to send per update
 MAX_CARS_PER_MESSAGE = 8
+
+# YOUR DATASET ID FROM APIFY CONSOLE
+YOUR_DATASET_ID = "LbGDKcIwiRQilOepM"  # <-- 180 cars waiting here!
+
+# File to remember which cars we've already sent
+SENT_CARS_FILE = "sent_cars.json"
+
+# ============================================
+# MEMORY FUNCTIONS - Track sent cars
+# ============================================
+
+def load_sent_cars() -> set:
+    """Load the list of car URLs we've already sent"""
+    try:
+        if Path(SENT_CARS_FILE).exists():
+            with open(SENT_CARS_FILE, 'r') as f:
+                return set(json.load(f))
+        else:
+            return set()
+    except Exception as e:
+        print(f"⚠️ Could not load sent cars: {e}")
+        return set()
+
+def save_sent_cars(sent_cars: set):
+    """Save the list of sent car URLs"""
+    try:
+        with open(SENT_CARS_FILE, 'w') as f:
+            json.dump(list(sent_cars), f)
+        print(f"✅ Saved {len(sent_cars)} sent cars to memory")
+    except Exception as e:
+        print(f"⚠️ Could not save sent cars: {e}")
 
 # ============================================
 # NIGERIAN CAR MARKET KEYWORDS
@@ -147,73 +180,44 @@ def get_badges(analysis: Dict[str, Any]) -> str:
     
     return " | ".join(badges) if badges else "📋 REGULAR"
 
-def filter_best_deals(cars: List[Dict[str, Any]], min_score: int = 5) -> List[Dict[str, Any]]:
-    """Return only cars with good deal scores"""
-    good_deals = []
-    for car in cars:
-        analysis = analyze_listing(car)
-        if analysis['deal_score'] >= min_score:
-            car['analysis'] = analysis
-            good_deals.append(car)
-    return good_deals
-
 # ============================================
-# APIFY FUNCTIONS
+# APIFY FUNCTIONS - GET CARS FROM YOUR DATASET
 # ============================================
 
-def get_latest_dataset_id() -> str:
-    """Find the most recent dataset ID from Apify"""
-    url = "https://api.apify.com/v2/datasets"
+def fetch_all_cars_from_dataset() -> List[Dict[str, Any]]:
+    """Fetch ALL cars from your Apify dataset"""
+    url = f"https://api.apify.com/v2/datasets/{YOUR_DATASET_ID}/items"
     params = {
         "token": APIFY_TOKEN,
-        "limit": 1,
-        "desc": True
-    }
-    
-    response = requests.get(url, params=params)
-    response.raise_for_status()
-    
-    data = response.json()
-    datasets = data.get('data', [])
-    
-    if not datasets:
-        raise Exception("No datasets found")
-    
-    latest = datasets[0]
-    dataset_id = latest['id']
-    item_count = latest.get('itemCount', 0)
-    created_at = latest.get('createdAt', 'unknown')
-    
-    print(f"📊 Latest dataset: {dataset_id} ({item_count} items, {created_at})")
-    
-    return dataset_id
-
-def fetch_cars_from_dataset(dataset_id: str, limit: int = 20) -> List[Dict[str, Any]]:
-    """Fetch car listings from Apify dataset"""
-    url = f"https://api.apify.com/v2/datasets/{dataset_id}/items"
-    params = {
-        "token": APIFY_TOKEN,
-        "limit": limit,
         "format": "json"
     }
     
-    response = requests.get(url, params=params)
-    response.raise_for_status()
-    
-    cars = response.json()
-    print(f"✅ Fetched {len(cars)} cars")
-    
-    return cars
-
-def check_for_new_scrape() -> List[Dict[str, Any]]:
-    """Check for new scrape and get data"""
     try:
-        dataset_id = get_latest_dataset_id()
-        cars = fetch_cars_from_dataset(dataset_id, limit=MAX_CARS_PER_MESSAGE * 2)
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        cars = response.json()
+        print(f"✅ Fetched {len(cars)} total cars from your dataset")
         return cars
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ Error fetching cars: {e}")
         return []
+
+def get_unsent_cars(all_cars: List[Dict[str, Any]], sent_cars: set) -> List[Dict[str, Any]]:
+    """Return only cars that haven't been sent yet"""
+    unsent = []
+    for car in all_cars:
+        # Use URL as unique identifier
+        car_url = car.get('url', '')
+        if car_url and car_url not in sent_cars:
+            # Add analysis to car for sorting
+            car['analysis'] = analyze_listing(car)
+            unsent.append(car)
+    
+    # Sort by deal score (best deals first)
+    unsent.sort(key=lambda x: x['analysis']['deal_score'], reverse=True)
+    
+    print(f"📊 Unsent cars: {len(unsent)} out of {len(all_cars)} total")
+    return unsent
 
 # ============================================
 # TELEGRAM FUNCTIONS
@@ -227,7 +231,7 @@ def send_telegram_message(text: str, parse_mode: str = "Markdown") -> bool:
         "chat_id": TELEGRAM_CHAT_ID,
         "text": text,
         "parse_mode": parse_mode,
-        "disable_web_page_preview": False  # This enables link previews!
+        "disable_web_page_preview": False
     }
     
     try:
@@ -236,24 +240,22 @@ def send_telegram_message(text: str, parse_mode: str = "Markdown") -> bool:
         print("✅ Message sent to Telegram")
         return True
     except Exception as e:
-        print(f"❌ Failed: {e}")
+        print(f"❌ Failed to send: {e}")
         return False
 
-def format_car_message(cars: List[Dict[str, Any]], title: str = "Abuja Cars Update") -> str:
+def format_car_message(cars: List[Dict[str, Any]], title: str = "Abuja Cars Update", 
+                       cars_left: int = 0, total_cars: int = 0) -> str:
     """Format cars with links and badges"""
-    if not cars:
-        return "No cars found in the latest scrape."
-    
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     message = f"🚗 *{title}*\n📅 {now}\n━━━━━━━━━━━━━━━━\n\n"
     
-    for i, car in enumerate(cars[:MAX_CARS_PER_MESSAGE], 1):
+    for i, car in enumerate(cars, 1):
         title = car.get('title', 'Unknown Car')
         price = car.get('price', 'Price N/A')
         location = car.get('location', 'Abuja')
         url = car.get('url', '')
+        analysis = car.get('analysis', analyze_listing(car))
         
-        analysis = analyze_listing(car)
         emoji, rating = get_deal_rating(analysis['deal_score'])
         badges = get_badges(analysis)
         
@@ -266,76 +268,125 @@ def format_car_message(cars: List[Dict[str, Any]], title: str = "Abuja Cars Upda
         if analysis['reasons']:
             message += f"💡 {analysis['reasons'][0]}\n"
         
-        # CLICKABLE LINK TO JIJI
         if url:
             message += f"🔗 [View Listing on Jiji]({url})\n"
         
         message += "─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─\n\n"
     
-    hot_deals = sum(1 for car in cars if analyze_listing(car)['deal_score'] >= 5)
-    message += f"📊 *{len(cars[:MAX_CARS_PER_MESSAGE])} cars shown"
-    if hot_deals > 0:
-        message += f" | 🔥 {hot_deals} hot deals"
-    message += "*\n🤖 *Updates every 30 min*"
+    # Add progress info
+    if cars_left > 0:
+        message += f"📊 *Sent {len(cars)} cars | {cars_left} remaining in dataset*"
+    else:
+        message += f"📊 *Sent {len(cars)} cars*"
     
     return message
 
 # ============================================
-# MAIN BOT LOGIC - AUTOMATIC CONTINUOUS MODE
+# MAIN BOT LOGIC
 # ============================================
 
 def send_car_update():
-    """Main function: Check and send cars"""
+    """Main function: Send 8 new cars from your dataset"""
     print(f"\n{'='*50}")
     print(f"🔍 Checking at {datetime.now()}")
     print(f"{'='*50}")
     
-    cars = check_for_new_scrape()
+    # 1. Load which cars we've already sent
+    sent_cars = load_sent_cars()
+    print(f"📝 Already sent {len(sent_cars)} cars")
     
-    if not cars:
-        print("ℹ️ No cars found")
+    # 2. Fetch ALL cars from your dataset
+    all_cars = fetch_all_cars_from_dataset()
+    
+    if not all_cars:
+        send_telegram_message("❌ Could not fetch cars from Apify. Check token or dataset ID.")
         return
     
-    # Send regular update
-    regular_message = format_car_message(cars, "Latest Cars in Abuja")
-    send_telegram_message(regular_message)
+    # 3. Get cars we haven't sent yet
+    unsent_cars = get_unsent_cars(all_cars, sent_cars)
     
-    # Send hot deals separately
-    best_deals = filter_best_deals(cars, min_score=5)
-    if best_deals:
-        print(f"🔥 Found {len(best_deals)} hot deals!")
-        deals_message = format_car_message(best_deals, "🔥 HOT DEALS ALERT! 🔥")
-        send_telegram_message(deals_message)
+    # 4. Check if we have any cars left
+    if not unsent_cars:
+        message = (
+            "⚠️ *DATASET COMPLETE* ⚠️\n\n"
+            "✅ All 180 cars have been sent to Telegram!\n\n"
+            "🔄 *Next step:*\n"
+            "1. Go to Apify Console\n"
+            "2. Run the Jiji scraper again\n"
+            "3. Get new dataset ID\n"
+            "4. Update YOUR_DATASET_ID in bot\n\n"
+            "Bot will pause until new dataset is added."
+        )
+        send_telegram_message(message)
+        print("🏁 All cars sent! Waiting for new dataset...")
+        return
     
-    time.sleep(2)
+    # 5. Take next 8 cars
+    next_cars = unsent_cars[:MAX_CARS_PER_MESSAGE]
+    
+    # 6. Mark these as sent
+    for car in next_cars:
+        car_url = car.get('url', '')
+        if car_url:
+            sent_cars.add(car_url)
+    
+    # 7. Save updated sent list
+    save_sent_cars(sent_cars)
+    
+    # 8. Calculate remaining cars
+    cars_remaining = len(unsent_cars) - len(next_cars)
+    
+    # 9. Format and send message
+    if cars_remaining > 0:
+        title = f"Next 8 Cars ({cars_remaining} remaining)"
+    else:
+        title = "Final 8 Cars in Dataset"
+    
+    message = format_car_message(next_cars, title, cars_remaining, len(all_cars))
+    send_telegram_message(message)
+    
+    print(f"✅ Sent {len(next_cars)} cars. {cars_remaining} left in dataset")
 
 def send_startup_message():
     """Send message when bot starts"""
+    sent_cars = load_sent_cars()
+    sent_count = len(sent_cars)
+    
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    
+    if sent_count == 0:
+        status = "🆕 Fresh start - No cars sent yet"
+    elif sent_count < 180:
+        status = f"📊 Progress: {sent_count}/180 cars sent"
+    else:
+        status = "✅ All 180 cars sent - Ready for new dataset"
+    
     message = (
-        "🤖 *Abuja Car Bot Started*\n\n"
+        "🤖 *Abuja Car Bot Restarted*\n\n"
         f"🕐 {now}\n"
-        "📡 Monitoring Apify for new cars\n"
-        "⏰ Updates every 30 minutes\n\n"
-        "*I'll send:*\n"
-        "• Latest cars with 🔗 links to Jiji\n"
-        "• 🔥 Hot deal alerts\n"
-        "• Direct seller & distress badges\n\n"
-        "_First update coming in a few seconds..._"
+        f"{status}\n"
+        "📡 Using YOUR dataset: LbGDKcIwiRQilOepM\n"
+        "⏰ Sending 8 cars every 30 minutes\n\n"
+        "_Updates starting soon..._"
     )
     send_telegram_message(message)
 
 def run_continuous():
-    """Run continuously - NO PROMPTS, just runs forever"""
-    print("🚀 Starting Abuja Car Bot - CONTINUOUS MODE")
-    print("📡 Checking every 30 minutes")
-    print("Press Ctrl+C to stop\n")
+    """Run continuously - NO PROMPTS, AUTO-START"""
+    print("""
+    ╔════════════════════════════════╗
+    ║    ABUJA CAR BOT - DEAL FINDER ║
+    ║    AUTO-START - NO PROMPTS     ║
+    ║    Sending 8 cars every 30 min ║
+    ║    Dataset: 180 cars total     ║
+    ╚════════════════════════════════╝
+    """)
     
     # Send startup message
     try:
         send_startup_message()
-    except:
-        print("⚠️ Could not send startup message (might be first run)")
+    except Exception as e:
+        print(f"⚠️ Could not send startup message: {e}")
     
     # Run immediately
     send_car_update()
@@ -343,20 +394,21 @@ def run_continuous():
     # Schedule regular checks
     schedule.every(30).minutes.do(send_car_update)
     
-    # Keep running
+    # Keep running forever
+    print("📡 Bot is running. Press Ctrl+C to stop.")
     try:
         while True:
             schedule.run_pending()
             time.sleep(60)
     except KeyboardInterrupt:
-        print("\n👋 Bot stopped")
+        print("\n👋 Bot stopped by user")
         try:
             send_telegram_message("🛑 Bot stopped")
         except:
             pass
 
 # ============================================
-# ENTRY POINT - NO PROMPTS, AUTOMATIC CONTINUOUS
+# ENTRY POINT - AUTO-START
 # ============================================
 
 if __name__ == "__main__":
@@ -370,14 +422,5 @@ if __name__ == "__main__":
         print("❌ Missing:", ", ".join(missing))
         exit(1)
     
-    # Print banner
-    print("""
-    ╔════════════════════════════════╗
-    ║    ABUJA CAR BOT - DEAL FINDER ║
-    ║    AUTOMATIC CONTINUOUS MODE   ║
-    ║    Sending cars every 30 min   ║
-    ╚════════════════════════════════╝
-    """)
-    
-    # AUTOMATICALLY RUN CONTINUOUS - NO PROMPTS!
+    # AUTO-START - NO PROMPTS!
     run_continuous()

@@ -21,7 +21,7 @@ TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
 # NEW: Dataset ID now comes from environment variable!
-APIFY_DATASET_ID = os.environ.get('APIFY_DATASET_ID')
+APIFY_DATASET_ID = os.environ.get('DATASET_ID')
 
 # How many cars to send per update
 MAX_CARS_PER_MESSAGE = 8

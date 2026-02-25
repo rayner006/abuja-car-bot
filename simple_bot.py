@@ -19,7 +19,7 @@ TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
 # How many cars to send per update
-MAX_CARS_PER_MESSAGE = 20
+MAX_CARS_PER_MESSAGE = 8
 
 # ============================================
 # NIGERIAN CAR MARKET KEYWORDS

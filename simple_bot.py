@@ -2,6 +2,7 @@
 """
 Abuja Car Bot - Automatically sends Jiji.ng car deals to Telegram every 30 minutes
 Finds direct sellers, used cars, cheap prices, and distress sales
+AUTO-CONTINUOUS MODE - No prompts, runs forever
 """
 
 import os
@@ -123,7 +124,6 @@ def analyze_listing(car: Dict[str, Any]) -> Dict[str, Any]:
 
 def get_deal_rating(score: int) -> Tuple[str, str]:
     """Convert score to emoji rating"""
-    if score >= 8:
     if score >= 8:
         return "🔥🔥", "HOT DEAL"
     elif score >= 5:
@@ -266,7 +266,7 @@ def format_car_message(cars: List[Dict[str, Any]], title: str = "Abuja Cars Upda
         if analysis['reasons']:
             message += f"💡 {analysis['reasons'][0]}\n"
         
-        # THIS IS THE LINK YOU WANT - CLICKABLE!
+        # CLICKABLE LINK TO JIJI
         if url:
             message += f"🔗 [View Listing on Jiji]({url})\n"
         
@@ -281,7 +281,7 @@ def format_car_message(cars: List[Dict[str, Any]], title: str = "Abuja Cars Upda
     return message
 
 # ============================================
-# MAIN BOT LOGIC
+# MAIN BOT LOGIC - AUTOMATIC CONTINUOUS MODE
 # ============================================
 
 def send_car_update():
@@ -325,33 +325,38 @@ def send_startup_message():
     )
     send_telegram_message(message)
 
-def run_once():
-    """Run once for testing"""
-    print("🚀 Running one-time check...")
-    send_car_update()
-    print("✅ Done!")
-
-def run_scheduler():
-    """Run continuously"""
-    print("🚀 Starting Abuja Car Bot")
+def run_continuous():
+    """Run continuously - NO PROMPTS, just runs forever"""
+    print("🚀 Starting Abuja Car Bot - CONTINUOUS MODE")
     print("📡 Checking every 30 minutes")
     print("Press Ctrl+C to stop\n")
     
-    send_startup_message()
-    send_car_update()  # Run immediately
+    # Send startup message
+    try:
+        send_startup_message()
+    except:
+        print("⚠️ Could not send startup message (might be first run)")
     
+    # Run immediately
+    send_car_update()
+    
+    # Schedule regular checks
     schedule.every(30).minutes.do(send_car_update)
     
+    # Keep running
     try:
         while True:
             schedule.run_pending()
             time.sleep(60)
     except KeyboardInterrupt:
         print("\n👋 Bot stopped")
-        send_telegram_message("🛑 Bot stopped")
+        try:
+            send_telegram_message("🛑 Bot stopped")
+        except:
+            pass
 
 # ============================================
-# ENTRY POINT
+# ENTRY POINT - NO PROMPTS, AUTOMATIC CONTINUOUS
 # ============================================
 
 if __name__ == "__main__":
@@ -365,19 +370,14 @@ if __name__ == "__main__":
         print("❌ Missing:", ", ".join(missing))
         exit(1)
     
+    # Print banner
     print("""
     ╔════════════════════════════════╗
     ║    ABUJA CAR BOT - DEAL FINDER ║
-    ║    Sends links every 30 min    ║
+    ║    AUTOMATIC CONTINUOUS MODE   ║
+    ║    Sending cars every 30 min   ║
     ╚════════════════════════════════╝
     """)
     
-    print("1. Run once (test)")
-    print("2. Run continuously (recommended)")
-    
-    choice = input("Choose (1 or 2): ").strip()
-    
-    if choice == "1":
-        run_once()
-    else:
-        run_scheduler()
+    # AUTOMATICALLY RUN CONTINUOUS - NO PROMPTS!
+    run_continuous()

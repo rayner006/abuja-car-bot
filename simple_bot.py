@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Abuja Car Bot - Sends 8 cars every 30 min from your Apify dataset
-Dataset ID now comes from environment variable - no code changes needed!
+Abuja Car Bot - Sends 8 Abuja cars every 30 min from your Apify dataset
+With complete Abuja locations and working links!
 """
 
 import os
@@ -14,13 +14,13 @@ from typing import List, Dict, Any, Tuple
 from pathlib import Path
 
 # ============================================
-# CONFIGURATION - ALL from environment variables
+# CONFIGURATION - Get from environment variables
 # ============================================
 APIFY_TOKEN = os.environ.get('APIFY_TOKEN')
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
-# NEW: Dataset ID now comes from environment variable!
+# Dataset ID from environment (you set this as DATASET_ID in Render)
 APIFY_DATASET_ID = os.environ.get('DATASET_ID')
 
 # How many cars to send per update
@@ -36,7 +36,7 @@ missing = []
 if not APIFY_TOKEN: missing.append("APIFY_TOKEN")
 if not TELEGRAM_BOT_TOKEN: missing.append("TELEGRAM_BOT_TOKEN")
 if not TELEGRAM_CHAT_ID: missing.append("TELEGRAM_CHAT_ID")
-if not APIFY_DATASET_ID: missing.append("APIFY_DATASET_ID")  # NEW check!
+if not APIFY_DATASET_ID: missing.append("DATASET_ID (set as APIFY_DATASET_ID in code)")
 
 if missing:
     print("❌ Missing required environment variables:", ", ".join(missing))
@@ -56,6 +56,7 @@ def load_sent_cars() -> set:
             with open(SENT_CARS_FILE, 'r') as f:
                 return set(json.load(f))
         else:
+            print("📝 No sent cars file found, starting fresh")
             return set()
     except Exception as e:
         print(f"⚠️ Could not load sent cars: {e}")
@@ -69,6 +70,134 @@ def save_sent_cars(sent_cars: set):
         print(f"✅ Saved {len(sent_cars)} sent cars to memory")
     except Exception as e:
         print(f"⚠️ Could not save sent cars: {e}")
+
+# ============================================
+# COMPLETE ABUJA LOCATIONS - ALL AREAS!
+# ============================================
+
+def filter_abuja_only(cars: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Filter cars to show only Abuja/FCT results - EVERYWHERE!
+    From the big mansions to the small streets!
+    """
+    # 🔴 COMPLETE ABUJA/FCT LOCATIONS
+    abuja_keywords = [
+        # Main city areas
+        'abuja', 'fct', 'f.c.t', 'federal capital territory',
+        
+        # PHASE 1 - Central areas
+        'central area', 'phase 1', 'phase i', 'garki', 'garki i', 'garki ii',
+        'wuse', 'wuse i', 'wuse ii', 'wuse zone', 'asokoro', 'maitama',
+        'jabi', 'jabi airport', 'jabi road', 'utako', 'guzape', 'durumi',
+        
+        # PHASE 2 - Extensions
+        'phase 2', 'phase ii', 'wuye', 'katampe', 'kado', 'kado estate',
+        'life camp', 'lifecamp', 'life camp estate',
+        'mabushi', 'mabushi district',
+        
+        # PHASE 3 - Developing areas
+        'phase 3', 'phase iii', 'iwo road', 'nyanya', 'karu', 'karu site',
+        'gwagwalada', 'kubwa', 'kubwa expressway', 'bwari', 'bwari area',
+        'dutse', 'dutse abuja',
+        
+        # Satellite towns
+        'lugbe', 'lugbe abuja', 'lugbe airport', 'karshi',
+        'nyanya', 'nyanya karu', 'nyanya market',
+        'mararaba', 'mararaba abuja', 'masaka',
+        
+        # Major roads & districts
+        'airport road', 'abuja airport road', 'mbora',
+        'gwarimpa', 'gwarinpa', 'gwarinpa estate',
+        'dawaki', 'dawaki abuja', 'dawaki extension',
+        'kubwa', 'kubwa phase', 'kubwa extension',
+        
+        # Eastern bypass areas
+        'apo', 'apo legislative', 'apo zone', 'apo district',
+        'apo resettlement', 'gudu', 'gudu district',
+        
+        # Other FCT areas
+        'zuba', 'zuba abuja', 'dei dei', 'kuje', 'kwali', 'abaji',
+        
+        # Estates & neighborhoods
+        'sunny vale', 'sunnyvale', 'sunny vale estate',
+        'apex estate', 'prince and princess', 'princess estate',
+        'efab', 'efab estate', 'trademore', 'trademore estate',
+        'love garden', 'love garden estate',
+        
+        # All phases and zones
+        'phase 4', 'phase iv', 'phase 5', 'phase v',
+        'zone 1', 'zone 2', 'zone 3', 'zone 4', 'zone e', 'zone f', 'zone g',
+        
+        # Street-level (common mentions)
+        'constituency road', 'constitution road', 'shehu shagari way',
+        'ahmadu bello way', 'murtala mohammed way', 'moshood abiola way',
+        
+        # Area numbers
+        'area 1', 'area 2', 'area 3', 'area 4', 'area 5', 'area 6', 'area 7',
+        'area 8', 'area 9', 'area 10', 'area 11', 'area 12', 'area 13',
+        'area 14', 'area 15',
+        
+        # Near airports
+        'nnamdi azikiwe airport', 'abuja airport', 'airport village',
+        
+        # Institutions (people dey use as landmarks)
+        'university of abuja', 'uniabuja', 'baze university',
+        'veritas university', 'nile university',
+        'american international school', 'army barracks',
+        
+        # Markets
+        'wuse market', 'garki market', 'gwarinpa market',
+        'kubwa market', 'nyanya market', 'karu market',
+        'utako market', 'jabi lake', 'jabi park',
+        'millennium park', 'city park',
+        
+        # New developments
+        'katampe extension', 'cbd', 'central business district',
+        'diplomatic zone', 'diplomatic drive',
+        'presidential quarters', 'presidential villa',
+        
+        # Area councils
+        'abaji area', 'bwari area', 'gwagwalada area',
+        'kuje area', 'kwali area', 'municipal area',
+        
+        # Local lingo
+        'town', 'buja', 'the capital', 'fct abuja', 'abuja city',
+        'city center', 'main city',
+    ]
+    
+    filtered_cars = []
+    print("\n📍 FILTERING FOR ABUJA CARS...")
+    
+    for car in cars:
+        # Check all possible location fields
+        location_fields = [
+            str(car.get('region_name', '')).lower(),
+            str(car.get('region', '')).lower(),
+            str(car.get('location', '')).lower(),
+            str(car.get('address', '')).lower(),
+            str(car.get('area', '')).lower(),
+            str(car.get('zone', '')).lower(),
+            str(car.get('district', '')).lower(),
+        ]
+        
+        # Also check title and description for location hints
+        title = str(car.get('title', '')).lower()
+        description = str(car.get('short_description', '') or car.get('details', '')).lower()
+        
+        full_location_text = ' '.join(location_fields) + ' ' + title + ' ' + description
+        
+        # Check if any Abuja keyword dey
+        is_abuja = any(keyword in full_location_text for keyword in abuja_keywords)
+        
+        if is_abuja:
+            filtered_cars.append(car)
+            print(f"✅ Abuja: {car.get('title', 'No title')[:40]}...")
+        else:
+            # Skip non-Abuja cars
+            pass
+    
+    print(f"📊 Abuja cars found: {len(filtered_cars)} out of {len(cars)} total")
+    return filtered_cars
 
 # ============================================
 # NIGERIAN CAR MARKET KEYWORDS
@@ -130,7 +259,7 @@ PIDGIN_KEYWORDS = [
 def analyze_listing(car: Dict[str, Any]) -> Dict[str, Any]:
     """Analyze a car listing and return all relevant flags"""
     title = str(car.get('title', '')).lower()
-    description = str(car.get('description', '')).lower()
+    description = str(car.get('short_description', '') or car.get('details', '') or '').lower()
     full_text = f"{title} {description}"
     
     is_direct_seller = any(keyword in full_text for keyword in DIRECT_SELLER_KEYWORDS + PIDGIN_KEYWORDS)
@@ -195,8 +324,18 @@ def get_badges(analysis: Dict[str, Any]) -> str:
     
     return " | ".join(badges) if badges else "📋 REGULAR"
 
+def filter_best_deals(cars: List[Dict[str, Any]], min_score: int = 5) -> List[Dict[str, Any]]:
+    """Return only cars with good deal scores"""
+    good_deals = []
+    for car in cars:
+        analysis = analyze_listing(car)
+        if analysis['deal_score'] >= min_score:
+            car['analysis'] = analysis
+            good_deals.append(car)
+    return good_deals
+
 # ============================================
-# APIFY FUNCTIONS - USING ENV VARIABLE
+# APIFY FUNCTIONS - Fetch from your dataset
 # ============================================
 
 def fetch_all_cars_from_dataset() -> List[Dict[str, Any]]:
@@ -211,7 +350,7 @@ def fetch_all_cars_from_dataset() -> List[Dict[str, Any]]:
         response = requests.get(url, params=params)
         response.raise_for_status()
         cars = response.json()
-        print(f"✅ Fetched {len(cars)} total cars from dataset: {APIFY_DATASET_ID}")
+        print(f"✅ Fetched {len(cars)} total cars from dataset")
         return cars
     except Exception as e:
         print(f"❌ Error fetching cars: {e}")
@@ -221,12 +360,15 @@ def get_unsent_cars(all_cars: List[Dict[str, Any]], sent_cars: set) -> List[Dict
     """Return only cars that haven't been sent yet"""
     unsent = []
     for car in all_cars:
-        car_url = car.get('url', '')
+        # Try multiple possible URL fields
+        car_url = (car.get('url') or car.get('message_url') or car.get('guid') or '')
         if car_url and car_url not in sent_cars:
             car['analysis'] = analyze_listing(car)
             unsent.append(car)
     
+    # Sort by deal score (best deals first)
     unsent.sort(key=lambda x: x['analysis']['deal_score'], reverse=True)
+    
     print(f"📊 Unsent cars: {len(unsent)} out of {len(all_cars)} total")
     return unsent
 
@@ -256,22 +398,46 @@ def send_telegram_message(text: str, parse_mode: str = "Markdown") -> bool:
 
 def format_car_message(cars: List[Dict[str, Any]], title: str = "Abuja Cars Update", 
                        cars_left: int = 0, total_cars: int = 0) -> str:
-    """Format cars with links and badges"""
+    """Format cars with links and badges - WITH JIJI DOMAIN FIX"""
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     message = f"🚗 *{title}*\n📅 {now}\n━━━━━━━━━━━━━━━━\n\n"
     
     for i, car in enumerate(cars, 1):
-        title = car.get('title', 'Unknown Car')
-        price = car.get('price', 'Price N/A')
-        location = car.get('location', 'Abuja')
-        url = car.get('url', '')
-        analysis = car.get('analysis', analyze_listing(car))
+        # Get basic info
+        car_title = car.get('title', 'Unknown Car')
         
+        # Price handling
+        price_obj = car.get('price_obj', {})
+        if isinstance(price_obj, dict):
+            price = price_obj.get('N', '') or price_obj.get('value', '') or 'Price N/A'
+        else:
+            price = car.get('price_title', 'Price N/A')
+        
+        # Location
+        location = (car.get('region_name', '') or car.get('region', '') or 
+                   car.get('location', '') or 'Abuja')
+        
+        # 🔗 URL FIX - Add Jiji domain if needed
+        url_path = (car.get('url') or car.get('message_url') or car.get('guid') or '')
+        
+        if url_path:
+            if url_path.startswith('/'):
+                full_url = f"https://jiji.ng{url_path}"
+            elif not url_path.startswith('http'):
+                full_url = f"https://{url_path}"
+            else:
+                full_url = url_path
+        else:
+            full_url = ''
+        
+        # Get analysis
+        analysis = car.get('analysis', analyze_listing(car))
         emoji, rating = get_deal_rating(analysis['deal_score'])
         badges = get_badges(analysis)
         
+        # Build message
         message += f"{emoji} *{rating}* {emoji}\n"
-        message += f"*{i}. {title}*\n"
+        message += f"*{i}. {car_title}*\n"
         message += f"`{badges}`\n"
         message += f"💰 *Price:* {price}\n"
         message += f"📍 *Location:* {location}\n"
@@ -279,13 +445,15 @@ def format_car_message(cars: List[Dict[str, Any]], title: str = "Abuja Cars Upda
         if analysis['reasons']:
             message += f"💡 {analysis['reasons'][0]}\n"
         
-        if url:
-            message += f"🔗 [View Listing on Jiji]({url})\n"
+        # Add link if available
+        if full_url:
+            message += f"🔗 [View Listing on Jiji]({full_url})\n"
         
         message += "─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─\n\n"
     
+    # Add summary
     if cars_left > 0:
-        message += f"📊 *Sent {len(cars)} cars | {cars_left} remaining in dataset*"
+        message += f"📊 *Sent {len(cars)} cars | {cars_left} remaining in Abuja*"
     else:
         message += f"📊 *Sent {len(cars)} cars*"
     
@@ -296,57 +464,75 @@ def format_car_message(cars: List[Dict[str, Any]], title: str = "Abuja Cars Upda
 # ============================================
 
 def send_car_update():
-    """Main function: Send 8 new cars from your dataset"""
+    """Main function: Send 8 new Abuja cars from your dataset"""
     print(f"\n{'='*50}")
     print(f"🔍 Checking at {datetime.now()}")
     print(f"{'='*50}")
     
+    # Load sent cars
     sent_cars = load_sent_cars()
     print(f"📝 Already sent {len(sent_cars)} cars")
     
+    # Fetch all cars
     all_cars = fetch_all_cars_from_dataset()
     
     if not all_cars:
         send_telegram_message("❌ Could not fetch cars from Apify. Check token or dataset ID.")
         return
     
-    unsent_cars = get_unsent_cars(all_cars, sent_cars)
+    # Filter for Abuja only
+    abuja_cars = filter_abuja_only(all_cars)
     
+    # Get unsent Abuja cars
+    unsent_cars = get_unsent_cars(abuja_cars, sent_cars)
+    
+    # Check if any unsent cars left
     if not unsent_cars:
-        message = (
-            "⚠️ *DATASET COMPLETE* ⚠️\n\n"
-            f"✅ All {len(all_cars)} items have been sent to Telegram!\n\n"
-            "🔄 *Next step:*\n"
-            "1. Go to Apify Console\n"
-            "2. Run a new scrape\n"
-            "3. Get new dataset ID\n"
-            "4. Update APIFY_DATASET_ID in Render environment variables\n\n"
-            "Bot will pause until new dataset is added."
-        )
+        if len(abuja_cars) == 0:
+            message = (
+                "⚠️ *NO ABUJA CARS FOUND* ⚠️\n\n"
+                f"✅ Dataset has {len(all_cars)} cars total\n"
+                "❌ But none for Abuja/FCT\n\n"
+                "🔄 *Next step:*\n"
+                "1. Run Jiji scraper again\n"
+                "2. Target Abuja specifically"
+            )
+        else:
+            message = (
+                "⚠️ *DATASET COMPLETE* ⚠️\n\n"
+                f"✅ All {len(abuja_cars)} Abuja cars have been sent!\n"
+                f"📊 Total in dataset: {len(all_cars)} cars\n\n"
+                "🔄 *Next step:*\n"
+                "1. Go to Apify Console\n"
+                "2. Run the Jiji scraper again\n"
+                "3. Update DATASET_ID in Render\n\n"
+                "Bot will pause until new dataset is added."
+            )
         send_telegram_message(message)
-        print("🏁 All items sent! Waiting for new dataset...")
+        print("🏁 All Abuja cars sent! Waiting for new dataset...")
         return
     
+    # Take next 8 cars
     next_items = unsent_cars[:MAX_CARS_PER_MESSAGE]
     
+    # Mark as sent
     for item in next_items:
-        item_url = item.get('url', '')
+        item_url = (item.get('url') or item.get('message_url') or item.get('guid') or '')
         if item_url:
             sent_cars.add(item_url)
     
+    # Save sent cars
     save_sent_cars(sent_cars)
     
+    # Calculate remaining
     items_remaining = len(unsent_cars) - len(next_items)
     
-    if items_remaining > 0:
-        title = f"Next {len(next_items)} Items ({items_remaining} remaining)"
-    else:
-        title = f"Final {len(next_items)} Items in Dataset"
-    
-    message = format_car_message(next_items, title, items_remaining, len(all_cars))
+    # Format and send message
+    title = f"Next {len(next_items)} Abuja Cars ({items_remaining} Abuja remaining)"
+    message = format_car_message(next_items, title, items_remaining, len(abuja_cars))
     send_telegram_message(message)
     
-    print(f"✅ Sent {len(next_items)} items. {items_remaining} left in dataset")
+    print(f"✅ Sent {len(next_items)} Abuja cars. {items_remaining} Abuja cars left")
 
 def send_startup_message():
     """Send message when bot starts"""
@@ -356,11 +542,12 @@ def send_startup_message():
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     
     message = (
-        "🤖 *Bot Restarted*\n\n"
+        "🤖 *Abuja Car Bot Restarted*\n\n"
         f"🕐 {now}\n"
-        f"📡 Using Dataset: `{APIFY_DATASET_ID[:8]}...`\n"
-        f"📊 Progress: {sent_count} items sent so far\n"
-        "⏰ Sending 8 items every 30 minutes\n\n"
+        f"📡 Dataset: `{APIFY_DATASET_ID[:8]}...`\n"
+        f"📍 *Filter:* Abuja/FCT only 🇳🇬\n"
+        f"📊 Progress: {sent_count} Abuja cars sent so far\n"
+        "⏰ Sending 8 Abuja cars every 30 minutes\n\n"
         "_Updates starting soon..._"
     )
     send_telegram_message(message)
@@ -369,9 +556,9 @@ def run_continuous():
     """Run continuously - NO PROMPTS, AUTO-START"""
     print("""
     ╔════════════════════════════════╗
-    ║      APIFY TO TELEGRAM BOT     ║
+    ║    ABUJA CAR BOT - FINAL VERSION ║
     ║    AUTO-START - NO PROMPTS     ║
-    ║    Sending 8 items every 30 min║
+    ║    Sending 8 Abuja cars every 30 min║
     ╚════════════════════════════════╝
     """)
     print(f"📡 Dataset ID: {APIFY_DATASET_ID}")
@@ -381,9 +568,13 @@ def run_continuous():
     except Exception as e:
         print(f"⚠️ Could not send startup message: {e}")
     
+    # Run immediately
     send_car_update()
+    
+    # Schedule regular checks
     schedule.every(30).minutes.do(send_car_update)
     
+    # Keep running forever
     print("📡 Bot is running. Press Ctrl+C to stop.")
     try:
         while True:
